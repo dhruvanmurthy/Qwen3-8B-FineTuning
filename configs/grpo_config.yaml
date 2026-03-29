@@ -1,0 +1,92 @@
+# GRPO Configuration for Qwen3-8B Tool-Use Fine-Tuning
+# Stage 2: Online RL with binary verifiable rewards
+#
+# Shared recipe: LoRA rank 32, LR 3e-5, batch 128, group 16, 50 steps
+
+# ============================================================================
+# MODEL
+# ============================================================================
+
+base_model: "Qwen/Qwen3-8B"
+sft_adapter_path: "./outputs/sft"
+
+# ============================================================================
+# LORA (rank 32 for GRPO — separate from SFT rank 64)
+# ============================================================================
+
+lora:
+  r: 32
+  alpha: 16
+  dropout: 0.05
+  target_modules:
+    - q_proj
+    - v_proj
+    - k_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  bias: "none"
+  task_type: "CAUSAL_LM"
+
+# ============================================================================
+# GRPO TRAINING
+# ============================================================================
+
+training:
+  max_steps: 50
+  learning_rate: 3.0e-5
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 32   # effective batch = 4 × 32 = 128
+  num_generations: 16               # group size
+  max_completion_length: 512
+  max_prompt_length: 1024
+
+  # Precision & memory
+  bf16: true
+  gradient_checkpointing: true
+
+  # Checkpointing
+  save_steps: 10
+  save_total_limit: 3
+
+  # Logging
+  logging_steps: 1
+  report_to: "wandb"
+
+  # Seed
+  seed: 42
+
+# ============================================================================
+# REWARD FUNCTIONS (all binary: 0.0 or 1.0)
+# ============================================================================
+
+rewards:
+  functions:
+    - tool_name_reward            # Correct tool selected
+    - argument_match_reward       # All arguments match
+    - schema_validation_reward    # Valid tool-call format
+    - full_chain_reward           # Multi-step chain correct
+  aggregation: "mean"             # Average of active reward signals
+
+# ============================================================================
+# ATROPOS COORDINATOR
+# ============================================================================
+
+atropos:
+  mode: "in_process"              # "in_process" for single-machine
+  environments:
+    - name: "api_bank"
+      weight: 1.0
+    - name: "toolbench"
+      weight: 1.0
+    - name: "gorilla"
+      weight: 1.0
+    - name: "synthetic"
+      weight: 1.0
+
+# ============================================================================
+# OUTPUT
+# ============================================================================
+
+output_dir: "./outputs/grpo"

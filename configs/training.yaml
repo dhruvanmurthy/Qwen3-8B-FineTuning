@@ -1,0 +1,156 @@
+# SFT Training Configuration for Qwen3-8B QLoRA Fine-tuning
+# Stage 1: Supervised fine-tuning for multi-step tool use
+# (See configs/grpo_config.yaml for Stage 2 GRPO)
+
+# ============================================================================
+# MODEL CONFIGURATION
+# ============================================================================
+
+model_name_or_path: "Qwen/Qwen3-8B"
+torch_dtype: "bfloat16"
+device_map: "auto"
+trust_remote_code: true
+
+# Quantization (4-bit for memory efficiency)
+load_in_4bit: true
+bnb_4bit_quant_type: "nf4"  # NormalFloat 4-bit
+bnb_4bit_compute_dtype: "bfloat16"
+bnb_4bit_use_double_quant: true  # Nested quantization
+
+# ============================================================================
+# LORA CONFIGURATION
+# ============================================================================
+
+lora_r: 64
+lora_alpha: 16  # 1/4 of r (0.25 scaling)
+lora_dropout: 0.05
+target_modules:
+  - "q_proj"
+  - "v_proj"
+  - "k_proj"
+  - "o_proj"
+  - "gate_proj"
+  - "up_proj"
+  - "down_proj"
+bias: "none"  # Don't train biases
+task_type: "CAUSAL_LM"
+modules_to_save: []
+
+# ============================================================================
+# TRAINING ARGUMENTS
+# ============================================================================
+
+output_dir: "./outputs/qwen3-8b-tool-use"
+overwrite_output_dir: true
+num_train_epochs: 3
+per_device_train_batch_size: 16
+per_device_eval_batch_size: 32
+gradient_accumulation_steps: 2
+gradient_checkpointing: true
+gradient_checkpointing_kwargs:
+  use_reentrant: false
+
+# ============================================================================
+# OPTIMIZATION
+# ============================================================================
+
+learning_rate: 2.0e-4
+weight_decay: 0.01
+max_grad_norm: 1.0
+optim: "adamw_8bit"  # 8-bit Adam for memory efficiency
+lr_scheduler_type: "linear"
+warmup_ratio: 0.1
+warmup_steps: 0  # Use ratio if non-zero
+
+# ============================================================================
+# EVALUATION & CHECKPOINTING
+# ============================================================================
+
+eval_strategy: "steps"
+eval_steps: 250
+save_strategy: "steps"
+save_steps: 250
+save_total_limit: 3
+load_best_model_at_end: true
+metric_for_best_model: "eval_loss"
+greater_is_better: false
+
+# ============================================================================
+# EARLY STOPPING (via EarlyStoppingCallback in train.py)
+# ============================================================================
+# Note: These are NOT TrainingArguments fields. They are passed via
+# EarlyStoppingCallback(early_stopping_patience=3, early_stopping_threshold=0.0)
+# which is added in src/train.py. Requires load_best_model_at_end=true above.
+
+# ============================================================================
+# LOGGING & REPORTING
+# ============================================================================
+
+logging_steps: 10
+logging_dir: "./logs"
+logging_first_step: true
+log_level: "info"
+log_level_replica: "warning"
+report_to:
+  - "wandb"
+  - "tensorboard"
+
+# ============================================================================
+# DATA & TOKENIZATION
+# ============================================================================
+
+# max_seq_length is not a TrainingArguments field; it is set in data_loader.py
+# via dataset_config.yaml (tokenization.max_length: 2048)
+preprocessing_num_workers: 4
+dataloader_pin_memory: true
+dataloader_drop_last: false
+dataloader_num_workers: 4
+
+# ============================================================================
+# TRAINING DYNAMICS
+# ============================================================================
+
+seed: 42
+data_seed: 42
+# Note: TrainingArguments only supports 'seed' and 'data_seed'.
+# torch/numpy/random seeds are derived automatically from 'seed'.
+
+# ============================================================================
+# FP16 / BF16
+# ============================================================================
+
+bf16: true  # Use bfloat16 (native on A100, stable)
+fp16: false
+
+# ============================================================================
+# DISTRIBUTED TRAINING (Multi-GPU)
+# ============================================================================
+
+# Uncomment for multi-GPU setup:
+# ddp_find_unused_parameters: false
+# ddp_backend: "nccl"
+# world_size: 1
+
+# ============================================================================
+# MISCELLANEOUS
+# ============================================================================
+
+resume_from_checkpoint: null
+push_to_hub: false  # Set to true to auto-push to HF Hub
+push_to_hub_model_id: "dhruvanmurthy/qwen3-8b-tool-use-lora"
+push_to_hub_strategy: "every_save"
+hub_model_id: "dhruvanmurthy/qwen3-8b-tool-use-lora"
+hub_strategy: "every_save"
+hub_token: null  # Will read from HF_TOKEN env var
+
+# Local evaluation (on a few samples)
+eval_on_start: false
+
+# Remove unused columns from dataset
+remove_unused_columns: true
+
+# Save strategy for model
+save_safetensors: true
+
+# Performance profiling
+skip_memory_metrics: false

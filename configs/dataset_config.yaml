@@ -1,0 +1,93 @@
+# Dataset Configuration
+# Defines dataset sources, paths, and preprocessing parameters
+
+sources:
+  api_bank:
+    enabled: true
+    name: "API-Bank"
+    url: "apibench/api-bank"
+    type: "huggingface"
+    split: "train"
+    samples: 5000
+    config: null
+    weight: 1.0
+    description: "Real API orchestration with execution results"
+  
+  toolbench:
+    enabled: true
+    name: "ToolBench"
+    url: "ToolBench/toolbench"
+    type: "huggingface"
+    split: "train"
+    config: "G1_instructions"
+    samples: 15000
+    weight: 1.0
+    description: "Tool selection and chaining from large catalogs"
+  
+  gorilla:
+    enabled: true
+    name: "Gorilla"
+    url: "gorilla-llm/gorilla-dataset"
+    type: "huggingface"
+    split: "eval"
+    config: "api_domain"
+    samples: 5000
+    weight: 1.0
+    description: "Function calling with parameter correctness focus"
+  
+  synthetic:
+    enabled: true
+    name: "Synthetic"
+    path: "./data/raw/synthetic/"
+    type: "local"
+    samples: 15000
+    weight: 1.0
+    description: "Generated via instruction templates"
+
+# Data preprocessing
+preprocessing:
+  max_seq_length: 2048
+  min_seq_length: 50
+  remove_duplicates: true
+  dedup_method: "md5"  # or "semantic"
+  remove_incomplete: true
+  remove_non_english: false
+  language_threshold: 0.8
+  
+  # Filtering
+  filter_long_sequences: true
+  filter_short_sequences: true
+  
+  # Augmentation (optional)
+  augmentation_enabled: false
+  augmentation_rate: 0.1
+
+# Data splitting
+splits:
+  train: 0.8
+  validation: 0.1
+  test: 0.1
+  
+seed: 42
+stratified: false
+
+# Balancing
+balance_sources: true
+balance_by_category: false
+undersample_majority_tools: false
+majority_tool_ratio: 0.05  # Keep only 5% of most common tools
+
+# Output
+output_format: "huggingface"  # or "jsonl", "parquet"
+output_dir: "./data/processed"
+push_to_hub: false
+hub_dataset_id: "dhruvanmurthy/qwen3-8b-tool-use"
+hub_private: false
+
+# Caching
+cache_dir: "./hf_cache"
+use_auth_token: true
+
+# Logging
+log_level: "info"
+print_statistics: true
