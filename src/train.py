@@ -59,8 +59,8 @@ class DataArguments:
         metadata={"help": "Path to dataset config"}
     )
     num_samples: int = field(
-        default=40000,
-        metadata={"help": "Number of samples to use"}
+        default=0,
+        metadata={"help": "Max samples to use (0 = use all from data_dir)"}
     )
     max_seq_length: int = field(
         default=2048,

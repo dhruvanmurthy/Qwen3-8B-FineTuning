@@ -210,7 +210,7 @@ export HF_DATASETS_DOWNLOAD_TIMEOUT=3600  # 1 hour
 # Or download manually
 python << 'EOF'
 from datasets import load_dataset
-dataset = load_dataset("api-bank", cache_dir="./hf_cache")
+dataset = load_dataset("gorilla-llm/APIBench", data_files="torchhub_train.json", split="train", cache_dir="./hf_cache")
 EOF
 ```
 

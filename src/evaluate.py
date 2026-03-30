@@ -105,10 +105,17 @@ class ToolUseEvaluator:
         logger.info("[%s] Evaluating tool selection (%s)…", self.label, dataset_name)
 
         if dataset_name == "api-bank":
-            dataset = load_dataset("apibench/api-bank", split="test")
+            dataset = load_dataset(
+                "gorilla-llm/APIBench",
+                data_files="torchhub_train.json",
+                split="train",
+                trust_remote_code=True,
+            )
         elif dataset_name == "toolbench":
             dataset = load_dataset(
-                "ToolBench/toolbench", "G1_instructions", split="test"
+                "tuandunghcmut/toolbench-v1", "benchmark",
+                split="g1_instruction",
+                trust_remote_code=True,
             )
         else:
             raise ValueError(f"Unknown dataset: {dataset_name}")
@@ -149,7 +156,12 @@ class ToolUseEvaluator:
 
     def evaluate_argument_accuracy(self, num_samples: int = 500) -> float:
         logger.info("[%s] Evaluating argument accuracy…", self.label)
-        dataset = load_dataset("apibench/api-bank", split="test")
+        dataset = load_dataset(
+            "gorilla-llm/APIBench",
+            data_files="torchhub_train.json",
+            split="train",
+            trust_remote_code=True,
+        )
 
         if len(dataset) > num_samples:
             indices = np.random.choice(len(dataset), num_samples, replace=False)
@@ -182,7 +194,12 @@ class ToolUseEvaluator:
 
     def evaluate_schema_compliance(self, num_samples: int = 500) -> float:
         logger.info("[%s] Evaluating schema compliance…", self.label)
-        dataset = load_dataset("apibench/api-bank", split="test")
+        dataset = load_dataset(
+            "gorilla-llm/APIBench",
+            data_files="torchhub_train.json",
+            split="train",
+            trust_remote_code=True,
+        )
 
         if len(dataset) > num_samples:
             indices = np.random.choice(len(dataset), num_samples, replace=False)
@@ -212,7 +229,12 @@ class ToolUseEvaluator:
 
     def evaluate_multi_step(self, num_samples: int = 500) -> float:
         logger.info("[%s] Evaluating multi-step chains…", self.label)
-        dataset = load_dataset("apibench/api-bank", split="test")
+        dataset = load_dataset(
+            "gorilla-llm/APIBench",
+            data_files="torchhub_train.json",
+            split="train",
+            trust_remote_code=True,
+        )
 
         multi_step = dataset.filter(lambda x: len(x.get("api_calls", [])) > 1)
         if len(multi_step) > num_samples:
@@ -239,7 +261,12 @@ class ToolUseEvaluator:
 
     def evaluate_latency(self, num_samples: int = 100) -> float:
         logger.info("[%s] Evaluating latency…", self.label)
-        dataset = load_dataset("apibench/api-bank", split="train", trust_remote_code=True)
+        dataset = load_dataset(
+            "gorilla-llm/APIBench",
+            data_files="torchhub_train.json",
+            split="train",
+            trust_remote_code=True,
+        )
         if len(dataset) > num_samples:
             dataset = dataset.select(range(num_samples))
 

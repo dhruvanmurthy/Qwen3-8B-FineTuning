@@ -27,16 +27,16 @@ git commit -m "Initial commit: project scaffolding"
 ### Windows (PowerShell)
 
 ```powershell
-python -m venv venv
-.\venv\Scripts\Activate.ps1
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
 ### Linux / WSL
 
 ```bash
-python -m venv venv
-source venv/bin/activate
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -105,7 +105,7 @@ print(f'Columns:    {ds[\"train\"].column_names}')
 "
 ```
 
-**Expected**: ~32k train / ~4k val / ~4k test, columns include `input_ids`, `attention_mask`, `labels`.
+**Expected**: ~3,043 train / ~380 val / ~381 test, columns include `input_ids`, `attention_mask`, `labels`.
 
 ## Step 5 — Stage 0: Baseline Evaluation
 
@@ -221,7 +221,7 @@ for k,v in sft.items():
 
 ## Step 7 — Stage 2: GRPO Training
 
-This stage applies Group Relative Policy Optimization on top of the SFT checkpoint, using binary verifiable rewards and the Atropos coordinator.
+This stage applies Group Relative Policy Optimization on top of the SFT checkpoint, using binary verifiable rewards.
 
 ### Quick smoke test (2 min, 5 steps)
 

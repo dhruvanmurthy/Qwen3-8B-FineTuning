@@ -131,75 +131,35 @@ print(ds[0])
 
 ### 4. Synthetic Data (15,000 samples)
 
-**Source**: Generated via GPT-4 with careful prompting
-**Rationale**: Fill domain gaps, edge cases, instruction-following diversity
+**Source**: Generated via `scripts/generate_synthetic.py` with template-based generation
+**Rationale**: Fill domain gaps, provide majority of training data
 
-**Categories**:
-- E-commerce (product search, cart, checkout): 3,000
-- Travel (booking, itineraries, pricing): 3,000
-- Finance (payments, transfers, statements): 3,000
-- Content (writing, translation, summarization): 3,000
-- Utilities (reminders, scheduling, notifications): 3,000
+**Categories** (12 single-step + 6 multi-step generators):
+- Weather lookup, stock prices, currency conversion
+- Translation, unit conversion, math operations
+- Reminders, music search, email composition
+- Multi-step: translate+weather, stock+convert, weather+remind, etc.
 
-**Generation Process**:
-
-```python
-# Pseudo-code for synthetic data generation
-import anthropic
-
-def generate_synthetic_example(category: str) -> dict:
-    client = anthropic.Anthropic()
-    prompt = f"""
-    Generate a tool-use example for {category}. Format as JSON with:
-    - instruction: User query
-    - tools: Available tools with names, descriptions, parameters
-    - tool_calls: Expected function calls
-    - results: Simulated execution results
-    - response: Final assistant response
-
-    Ensure realistic parameters, diverse tool combinations.
-    """
-
-    response = client.messages.create(
-        model="claude-3-opus-20250219",
-        max_tokens=1024,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return json.loads(response.content[0].text)
-
-# Generate 15,000 examples
-examples = []
-for category in ["ecommerce", "travel", "finance", "content", "utilities"]:
-    for _ in range(3000):
-        examples.append(generate_synthetic_example(category))
+**Generation**:
+```bash
+python scripts/generate_synthetic.py --num-samples 40000 --seed 42
 ```
 
+**Output**:
+- `data/raw/synthetic/synthetic_single.jsonl` (~34,700 examples)
+- `data/raw/synthetic/synthetic_multistep.jsonl` (~5,300 examples)
+- 15,000 sampled during dataset loading
+
 **Quality Control**:
-- ✅ Schema validation (all required fields)
-- ✅ Manual review of 1,000 random samples (10%)
-- ✅ Hallucination detection (verify tool names exist)
-- ✅ Deduplication (MD5 hash)
+- Schema validation (text, expected_tool, expected_args fields)
+- MD5 deduplication
+- Deterministic with seed for reproducibility
 
 ## Data Format Standardization
 
-All sources converted to unified ChatML format:
-
-```yaml
-# Format:
-messages:
-  - role: system
-    content: "System prompt..."
-  - role: user
-    content: "User query..."
-    tools: [...]  # Optional tool definitions
-  - role: assistant
-    content: "...Thinking..."
-    tool_calls: [...]  # Optional function calls
-  - role: user
-    content: "[Tool execution results]"
-  - role: assistant
-    content: "Final response..."
-```
+All sources are normalized to a unified `text` column (see Step 3 below).
+The original heterogeneous schemas (ChatML messages, API calls, queries, etc.)
+are flattened to plain text for tokenization.
 
 ## Preprocessing Pipeline\n\n### Step 1: Generate Synthetic Data & Download HF Datasets\n\n```bash\nbash scripts/prepare_datasets.sh\n```\n\nThis runs two steps:\n1. `python scripts/generate_synthetic.py` → generates JSONL files in `data/raw/synthetic/`\n2. `python -c \"...\"` → loads all sources, normalizes, deduplicates, balances, splits, tokenizes
 
@@ -242,15 +202,7 @@ After normalization, the pipeline:
 - `data/processed/validation/` (~380 samples)
 - `data/processed/test/` (~381 samples)
 
-### Step 5: Upload to Hub (Optional)
-
-```bash
-huggingface-cli upload dhruvanmurthy/qwen3-8b-tool-use-dataset data/processed/hf_dataset
-```
-
-**Output**: Dataset on Hugging Face Hub
-- URL: https://huggingface.co/datasets/dhruvanmurthy/qwen3-8b-tool-use
-- Compatible with `load_dataset(...)`
+### Step 5: Upload to Hub (Optional)\n\n```bash\nhuggingface-cli upload dhruvanmurthy/qwen3-8b-tool-use-dataset data/processed\n```
 
 ## Configuration
 
@@ -329,9 +281,9 @@ For very large datasets, stream instead of downloading:
 from datasets import load_dataset
 
 # Stream without downloading
-toolbench = load_dataset("ToolBench/toolbench", streaming=True)
+toolbench = load_dataset("tuandunghcmut/toolbench-v1", "benchmark", split="g1_instruction", streaming=True)
 
-for sample in toolbench["train"]:
+for sample in toolbench:
     # Process one at a time
     process(sample)
 ```
@@ -343,23 +295,18 @@ for sample in toolbench["train"]:
 bash scripts/prepare_datasets.sh
 ```
 
-## Data Versioning with DVC
+## Data Versioning with Git
 
-Track dataset versions with DVC (Data Version Control):
+Track dataset config and code with Git (actual data files are gitignored):
 
 ```bash
-# Initialize DVC
-dvc init
-
-# Track processed dataset
-dvc add data/processed/dataset_all.jsonl
-git add data/processed/dataset_all.jsonl.dvc
-git commit -m "Add full dataset v1.0"
-
-# Create version tag
+# Tag current state
 git tag dataset-v1.0
 git push --tags
 ```
+
+The processed Arrow files in `data/processed/` are regenerated from scratch
+by `bash scripts/prepare_datasets.sh` and are gitignored.
 
 ## Deduplication & Quality
 
@@ -433,24 +380,7 @@ Final splits:
 
 ### Via HuggingFace Datasets
 
-```python
-from datasets import load_dataset
-
-# Local
-dataset = load_dataset("parquet", data_files="data/processed/hf_dataset/train-00000-of-00001.parquet")
-
-# Or from Hub
-dataset = load_dataset("dhruvanmurthy/qwen3-8b-tool-use", split="train")
-```
-
-### Via PyArrow
-
-```python
-import pyarrow.parquet as pq
-
-table = pq.read_table("data/processed/hf_dataset/train-00000-of-00001.parquet")
-dataset = table.to_pandas()
-```
+```python\nfrom datasets import load_from_disk\n\n# Local (Arrow format)\nds = load_from_disk(\"data/processed\")\ntrain = ds[\"train\"]\nprint(len(train), train.column_names)  # ~3043, ['input_ids', 'attention_mask', 'labels']\n```
 
 ## Balancing & Sampling Strategies
 
@@ -582,13 +512,6 @@ separately.
    bash scripts/prepare_datasets.sh
    ```
 
-2. Verify output:
-   ```bash
-   python -c "
-   from datasets import load_dataset
-   ds = load_dataset('parquet', data_files='data/processed/hf_dataset/train-*.parquet')
-   print(len(ds['train']), ds['train'][0].keys())
-   "
-   ```
+2. Verify output:\n   ```bash\n   python -c \"\n   from datasets import load_from_disk\n   ds = load_from_disk('data/processed')\n   print(len(ds['train']), ds['train'].column_names)\n   \"\n   ```
 
 3. Proceed to [TRAINING_PLAN.md](TRAINING_PLAN.md) for the 3-stage pipeline

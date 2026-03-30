@@ -9,8 +9,8 @@ Pipeline: **Baseline Eval → SFT Training → GRPO Training → Final Compariso
 ### Step 1.1: Create Virtual Environment
 ```bash
 # PowerShell on Windows
-python -m venv venv
-.\venv\Scripts\Activate.ps1
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 
 # Or conda
 conda create -n qwen3-finetune python=3.11
@@ -69,14 +69,16 @@ bash scripts/prepare_datasets.sh
 ### Step 3.2: Verify Dataset
 ```bash
 python -c "
-from datasets import load_dataset
-ds = load_dataset('parquet', data_files='data/processed/hf_dataset/train-*.parquet')
+from datasets import load_from_disk
+ds = load_from_disk('data/processed')
 print(f'Train samples: {len(ds[\"train\"])}')
+print(f'Validation samples: {len(ds[\"validation\"])}')
+print(f'Test samples: {len(ds[\"test\"])}')
 print(f'Columns: {ds[\"train\"].column_names}')
 "
 ```
 
-Expected: ~32,000 train samples.
+Expected: ~3,043 train / ~380 val / ~381 test, columns: `input_ids`, `attention_mask`, `labels`.
 
 ## Phase 4: Baseline Evaluation (15-30 min)
 
@@ -209,7 +211,7 @@ This runs: baseline eval → SFT train → SFT eval → GRPO train → GRPO eval
 ## Checklist
 
 - [ ] Environment setup and dependencies verified
-- [ ] Datasets downloaded and processed (~40k samples)
+- [ ] Datasets downloaded and processed (~3,043 train samples)
 - [ ] Baseline evaluation complete
 - [ ] SFT training complete (loss < 1.0)
 - [ ] SFT evaluation shows improvement over baseline
@@ -220,184 +222,9 @@ This runs: baseline eval → SFT train → SFT eval → GRPO train → GRPO eval
 - [ ] Azure resources cleaned up
 - [ ] Total cost < $150
 
-### Step 6.3: Log Results to W&B
-```bash
-python << 'EOF'
-import json
-import wandb
-
-with open("outputs/evaluation_results.json") as f:
-    results = json.load(f)
-
-wandb.log({
-    "eval/tool_selection": results["tool_selection_accuracy"],
-    "eval/argument_f1": results["argument_accuracy"],
-    "eval/multi_step": results["multi_step_success"],
-    "eval/error_handling": results["error_handling"],
-    "eval/latency_ms": results["latency_ms"],
-})
-EOF
-```
-
-## Phase 7: Publishing (Day 4 - 30 mins)
-
-### Step 7.1: Push to Hugging Face Hub
-```bash
-python << 'EOF'
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import PeftModel
-from huggingface_hub import login
-import os
-
-# Login
-login(token=os.getenv("HF_TOKEN"))
-
-# Load model
-base_model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-8B")
-model = PeftModel.from_pretrained(base_model, "outputs/model_final")
-
-# Push adapter to Hub
-model.push_to_hub(
-    "dhruvanmurthy/qwen3-8b-tool-use-lora",
-    token=os.getenv("HF_TOKEN")
-)
-
-# Push tokenizer
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B")
-tokenizer.push_to_hub(
-    "dhruvanmurthy/qwen3-8b-tool-use-lora",
-    token=os.getenv("HF_TOKEN")
-)
-EOF
-```
-
-Check: https://huggingface.co/dhruvanmurthy/qwen3-8b-tool-use-lora
-
-### Step 7.2: Create Version Tag
-```bash
-# Tag current state
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-This triggers GitHub Actions to:
-- Run tests
-- Create release
-- Build documentation
-
-Monitor: https://github.com/dhruvanmurthy/Qwen3-8B-FineTuning/actions
-
-## Phase 8: Cleanup (When Done)
-
-### Step 8.1: Stop Azure Compute (Save Money!)
-```bash
-# Stop compute clusters (don't delete workspace)
-az ml compute stop \
-  --name gpu-cluster \
-  --resource-group qwen3-finetuning
-```
-
-### Step 8.2: Keep Model, Delete Raw Data
-```bash
-# Delete raw data (not needed after processing)
-rm -rf data/raw/*
-
-# Keep processed data if you plan to retrain
-# rm -rf data/processed/*
-```
-
-### Step 8.3: Full Cleanup (Optional - Deletes Everything)
-```bash
-bash scripts/cleanup_azure.sh
-# Confirm: yes
-```
-
-## Quick Reference: Complete Timeline
-
-| Phase | Duration | Action | Cost |
-|-------|----------|--------|------|
-| 1 | 1h | Local setup | $0 |
-| 2 | 1h | Azure resources | $2 |
-| 3 | 2h | Data prep | $2 |
-| 4 | 2h | Local test | $3 |
-| 5 | 24h | Full training | $30 |
-| 6 | 1h | Evaluation | $1 |
-| 7 | 0.5h | Publishing | $0 |
-| **Total** | **31.5h** | **Complete** | **~$40** |
-
-## Expected Results
-
-### Metrics
-```
-Tool Selection:    92%+ (Target: >90%)
-Argument Accuracy: 87%+ (Target: >85%)
-Multi-Step Success: 81%+ (Target: >80%)
-Error Handling:    89%+ (Target: >85%)
-```
-
-### Training Dynamics
-```
-Epoch 1 Loss:  4.2 → 1.8
-Epoch 2 Loss:  1.8 → 1.3
-Epoch 3 Loss:  1.3 → 1.1
-Final Val Loss: ~1.2
-```
-
-### Cost
-```
-Training:    $30 (20h @ $1.50/hr spot)
-Storage:     $2 (100GB data)
-Evaluation:  $1 (compute)
-Total:       ~$40 (within budget!)
-```
-
-## Troubleshooting
-
-### If Training Fails
-```bash
-# Check job status
-az ml job show --name <job-name> -g qwen3-finetuning
-
-# View logs
-az ml job stream --name <job-name> -g qwen3-finetuning
-
-# Resume from checkpoint
-python src/train.py --resume_from_checkpoint outputs/checkpoint-XXX
-```
-
-### If Evaluation Low
-1. Train longer (add epochs)
-2. Increase learning rate
-3. Check dataset quality
-4. Review TROUBLESHOOTING.md
-
-### If Over Budget
-- Use A10 GPU (3x cheaper)
-- Reduce num_samples (30k → 20k)
-- Train fewer epochs (3 → 2)
-- See docs/BUDGET_OPTIMIZATION.md
-
-## Success Criteria
-
-✅ **Project successful if**:
-- Tool selection accuracy > 90%
-- Training completes in < 24h
-- Total cost < $150
-- Model pushes to HF Hub
-- GitHub repo has documentation
-- W&B tracks all runs
-
-## Next Steps After Success
-
-1. **Share Model**: Twitter, Reddit, Discord
-2. **Write Blog**: Medium article on approach
-3. **Iterate**: Try new datasets/methods
-4. **Optimize**: Reduce latency with ONNX export
-5. **Contribute**: Open-source improvements
-
 ---
 
-**Good luck! 🚀**
+**Good luck!**
 
 Start with Phase 1 and proceed chronologically. Each phase builds on previous.
 

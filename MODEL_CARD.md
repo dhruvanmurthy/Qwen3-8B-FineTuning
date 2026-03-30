@@ -11,30 +11,34 @@ This is a fine-tuned version of [Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B)
 - **LoRA Rank (r)**: 64
 - **LoRA Alpha (α)**: 16
 - **Target Modules**: q_proj, v_proj, k_proj, o_proj, gate_proj, up_proj, down_proj
-- **Training Data**: ~40k samples (API-Bank, ToolBench, Gorilla, Synthetic)
+- **Training Data**: ~3,043 train samples (from ~20k raw across APIBench, ToolBench, Gorilla BFCL, Synthetic)
 - **Training Time**: ~20 hours on A100 GPU
 - **Training Date**: March 2026
 
 ## Model Performance
 
-### Benchmarks
+### Benchmarks (Targets)
 
-| Task | Accuracy | Notes |
-|------|----------|-------|
-| **Tool Selection** | 92.3% | From 10+ API functions |
-| **Argument Generation** | 88.7% | Parameter type & value correctness |
-| **Multi-step Success** | 85.1% | 2-3 step tool chaining |
-| **Error Handling** | 91.5% | Graceful fallback on unknown tools |
-| **Latency** | 450ms | Per inference (single A100) |
+> Training has not yet been run. These are projected targets based on comparable work.
+
+| Task | Target | Notes |
+|------|--------|-------|
+| **Tool Selection** | >90% | From available API functions |
+| **Argument Generation** | >85% | Parameter type & value correctness |
+| **Multi-step Success** | >80% | 2-3 step tool chaining |
+| **Schema Compliance** | >90% | Valid JSON tool-call structure |
 
 ### Dataset Performance
 
-| Dataset | Accuracy | Samples |
-|---------|----------|---------|
-| API-Bank Test | 94.2% | 500 |
-| ToolBench Test | 89.8% | 1000 |
-| Gorilla Test | 91.5% | 400 |
-| Synthetic Adversarial | 83.2% | 300 |
+| Dataset | Accuracy | Test Samples |
+|---------|----------|--------------|
+| APIBench Test | TBD | ~95 |
+| ToolBench Test | TBD | ~95 |
+| Gorilla BFCL Test | TBD | ~95 |
+| Synthetic Test | TBD | ~95 |
+
+> **Note**: Test set is ~381 total samples, split roughly equally across 4 balanced sources.
+> Accuracies will be populated after running `python src/evaluate.py --mode all`.
 
 ## Intended Uses
 
@@ -88,22 +92,26 @@ This is a fine-tuned version of [Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B)
 - **Reasoning**: Limited to tool-relevant reasoning
 
 ### Known Limitations
-1. **Tool Vocab**: Trained on ~500 unique APIs; generalization to unseen APIs is ~70%
-2. **Hallucinations**: May suggest non-existent parameters in rare cases (~5%)
-3. **Context Length**: Maintains API definitions up to 4K tokens
-4. **Language**: Primarily English; multilingual performance untested
+1. **Small Training Set**: ~3,043 balanced training samples; ToolBench (200) and BFCL (258) are oversampled
+2. **Hallucinations**: May suggest non-existent parameters in rare cases
+3. **Context Length**: Trained with max_length=2048 tokens
+4. **Language**: English only; multilingual performance untested
+5. **Text Format**: Trained on unified `text` column (not structured ChatML); output format depends on source schema
 
 ## Training Details
 
 ### Data Composition
 ```
-API-Bank:        5,000 samples  (12.5%)  - Real API calls
-ToolBench:      15,000 samples  (37.5%)  - Tool selection & chaining
-Gorilla:         5,000 samples  (12.5%)  - Function calling
-Synthetic:      15,000 samples  (37.5%)  - Edge cases & instruction tuning
-─────────────────────────────────────────
-Total:          40,000 samples  (100%)
+APIBench (gorilla-llm/APIBench):                     5,000 raw → ~1,644 after dedup
+ToolBench (tuandunghcmut/toolbench-v1 benchmark):      200 raw →    200 after dedup
+Gorilla BFCL (gorilla-llm/Berkeley-Function-Calling):   258 raw →    258 after dedup
+Synthetic (scripts/generate_synthetic.py):           15,000 raw → ~12,280 after dedup
+─────────────────────────────────────────────────────────────────────────────────────
+Total raw:    20,458 → 14,382 after dedup → ~3,804 after balance → 3,043 train
 ```
+
+Balancing uses median-target resampling (~951 per source). Small sources
+(ToolBench, BFCL) are oversampled; large sources are undersampled.
 
 ### Training Hyperparameters
 ```yaml
@@ -121,7 +129,7 @@ Training:
   Max Grad Norm: 1.0
 
 Optimization:
-  Optimizer: AdamW
+  Optimizer: AdamW (8-bit)   # bitsandbytes 8-bit AdamW
   Scheduler: linear          # Linear decay
   GradAcc Steps: 2
 

@@ -2,188 +2,134 @@
 
 ## Dataset Summary
 
-Aggregated dataset of **40,000 curated examples** for training Qwen3-8B on multi-step tool use, function calling, and API orchestration.
+Aggregated dataset for training Qwen3-8B on multi-step tool use, function calling, and API orchestration. Raw data is loaded from 4 sources, normalized to a unified `text` column, deduplicated, balanced, and split.
 
 ### Dataset Composition
 
-| Source | Count | Split | Purpose | Status |
-|--------|-------|-------|---------|--------|
-| **API-Bank** | 5,000 | 80/10/10 | Real API orchestration | ✅ Processed |
-| **ToolBench** | 15,000 | 80/10/10 | Tool selection & chaining | ✅ Processed |
-| **Gorilla** | 5,000 | 80/10/10 | Function calling accuracy | ✅ Processed |
-| **Synthetic** | 15,000 | 80/10/10 | Edge cases & domain tasks | ✅ Generated |
-| **Total** | **40,000** | **80/10/10** | Multi-domain tool use | ✅ Ready |
+| Source | Raw Count | After Dedup | Balanced (~951/src) | Purpose |
+|--------|-----------|-------------|---------------------|----------|
+| **APIBench** | 5,000 | ~1,644 | ~951 | API call + domain documentation |
+| **ToolBench** | 200 | 200 | ~951 (oversampled) | Tool selection from API catalogs |
+| **Gorilla BFCL** | 258 | 258 | ~951 (oversampled) | Function calling accuracy |
+| **Synthetic** | 15,000 | ~12,280 | ~951 | Edge cases & domain diversity |
+| **Total** | **20,458** | **~14,382** | **~3,804** | **Multi-domain tool use** |
+
+### Final Splits
+
+| Split | Count |
+|-------|-------|
+| Train | ~3,043 |
+| Validation | ~380 |
+| Test | ~381 |
 
 ## Data Sources
 
-### 1. API-Bank
-- **Link**: https://huggingface.co/datasets/apibench/api-bank
-- **Samples**: 5,000 (from ~50k available)
-- **Focus**: Real-world API calls and sequences
-- **Format**: Instruction-following with multi-step execution
+### 1. APIBench
+- **Link**: https://huggingface.co/datasets/gorilla-llm/APIBench
+- **Samples**: 5,000 (across torchhub_train.json, huggingface_train.json, tensorflow_train.json)
+- **Focus**: API documentation with domain and api_call specifications
+- **Format**: domain + api_call + api_data (mixed-type JSON, loaded via pandas fallback)
 - **License**: CC BY 4.0
-- **Selection Criteria**: Diverse real-world APIs, max 3 API calls per sequence
+- **Selection Criteria**: All available samples from the 3 train files
 
-**Example**:
+**Schema**:
 ```json
 {
-  "instruction": "Get the latest stock price for Apple and Microsoft, then calculate the average.",
-  "tools": [
-    {"name": "get_stock_price", "params": {"symbol": "AAPL"}},
-    {"name": "get_stock_price", "params": {"symbol": "MSFT"}}
-  ],
-  "execution": [
-    {"tool": "get_stock_price", "params": {"symbol": "AAPL"}, "result": 195.45},
-    {"tool": "get_stock_price", "params": {"symbol": "MSFT"}, "result": 380.12}
-  ],
-  "output": "Apple: $195.45, Microsoft: $380.12. Average: $287.79"
+  "domain": "Image Classification",
+  "api_call": "hub.load('pytorch/vision', 'resnet18', pretrained=True)",
+  "api_data": {
+    "api_name": "resnet18",
+    "api_arguments": {"pretrained": true},
+    "description": "ResNet-18 model pre-trained on ImageNet"
+  }
 }
 ```
 
 ### 2. ToolBench
-- **Link**: https://huggingface.co/datasets/ToolBench/toolbench
-- **Samples**: 15,000 (from ~200k available, balanced subset)
-- **Focus**: Tool selection accuracy and chaining
-- **Format**: Query + available tools + expected tool calls
+- **Link**: https://huggingface.co/datasets/tuandunghcmut/toolbench-v1
+- **Samples**: 200 (benchmark config, g1_instruction split)
+- **Focus**: Tool selection from large API catalogs
+- **Format**: query + api_list + relevant_apis
 - **License**: Apache 2.0
-- **Selection Criteria**: Diverse tool categories, multi-step reasoning required
+- **Selection Criteria**: All 200 rows from benchmark split (oversampled during balancing)
 
-**Example**:
+**Schema**:
 ```json
 {
-  "query": "How can I send a email and create a calendar reminder for tomorrow?",
-  "available_tools": [
-    {"name": "send_email", "desc": "Send an email to recipient"},
-    {"name": "create_reminder", "desc": "Create a calendar reminder"},
-    {"name": "get_weather", "desc": "Get weather forecast"}
-  ],
-  "expected_calls": [
-    {"tool": "send_email", "args": {"recipient": "user@example.com", "body": "Email body"}},
-    {"tool": "create_reminder", "args": {"message": "Reminder", "time": "tomorrow"}}
-  ]
+  "query_id": 577,
+  "query": "I am a fitness enthusiast and I want to buy a fitness tracker. Can you suggest some top-rated fitness trackers?",
+  "api_list": [{"category_name": "Data", "tool_name": "ASIN Data", "api_name": "Category", ...}],
+  "relevant_apis": [["ASIN Data", "Search"], ["ASIN Data", "Product"]]
 }
 ```
 
-### 3. Gorilla
-- **Link**: https://huggingface.co/datasets/gorilla-llm/gorilla-dataset
-- **Samples**: 5,000 (from ~10k available)
+### 3. Gorilla BFCL
+- **Link**: https://huggingface.co/datasets/gorilla-llm/Berkeley-Function-Calling-Leaderboard
+- **Samples**: 258 (from BFCL_v3_live_simple.json)
 - **Focus**: Function calling with correct argument generation
-- **Format**: API documentation + function calls
+- **Format**: Nested question + function definitions (mixed-type JSON, loaded via pandas fallback)
 - **License**: MIT
-- **Selection Criteria**: Wide API coverage, parameter diversity
+- **Selection Criteria**: All rows from the live_simple file
 
-**Example**:
+**Schema**:
 ```json
 {
-  "api_name": "stripe.payment_intents.create",
-  "api_doc": "Creates a PaymentIntent object. After the PaymentIntent is created, you can attach a payment method and confirm to initiate the payment.",
-  "functional_category": ["payment_processing"],
-  "user_query": "Process a payment of $99.99 for customer cus_12345",
-  "parameters": {
-    "amount": 9999,
-    "currency": "usd",
-    "customer": "cus_12345"
-  },
-  "expected_call": "stripe.payment_intents.create(amount=9999, currency='usd', customer='cus_12345')"
+  "id": "live_simple_0-0-0",
+  "question": [[{"role": "user", "content": "Can you retrieve the details for user ID 7890?"}]],
+  "function": [{"name": "get_user_info", "description": "Retrieve details for a specific user",
+    "parameters": {"type": "dict", "required": ["user_id"],
+      "properties": {"user_id": {"type": "integer", "description": "The unique identifier"}}}}]
 }
 ```
 
 ### 4. Synthetic Data
-- **Source**: Generated via GPT-4 and instruction templates
-- **Samples**: 15,000
-- **Focus**: Domain-specific scenarios, edge cases, error handling
-- **Categories**:
-  - E-commerce (3,000 samples)
-  - Travel booking (3,000 samples)
-  - Financial services (3,000 samples)
-  - Content generation (3,000 samples)
-  - Miscellaneous (3,000 samples)
-- **Quality**: Human-reviewed (1,000 samples audited)
+- **Source**: Generated via `scripts/generate_synthetic.py` with template-based generation
+- **Samples**: 15,000 (sampled from 40,000 generated; ~34,700 single-step + ~5,300 multi-step)
+- **Focus**: Domain-specific scenarios, edge cases, tool-use diversity
+- **Categories** (12 single-step + 6 multi-step generators):
+  - Weather lookup, stock prices, currency conversion
+  - Translation, unit conversion, math operations
+  - Reminders, music search, email composition
+  - Multi-step: translate+weather, stock+convert, weather+remind, etc.
+- **Quality**: MD5 deduplication, schema validation, deterministic with seed
 
-**Example Template**:
+**Example**:
 ```json
 {
-  "category": "e-commerce",
-  "instruction": "Help customer find products and process checkout",
-  "tools": [
-    {"name": "search_products", "params": ["query", "category", "price_range"]},
-    {"name": "add_to_cart", "params": ["product_id", "quantity"]},
-    {"name": "apply_coupon", "params": ["code"]},
-    {"name": "checkout", "params": ["payment_method"]}
-  ],
-  "conversation": [
-    {"role": "user", "content": "Find winter jackets under $200"},
-    {"role": "assistant", "tool_calls": [{"tool": "search_products", "params": {"query": "winter jackets", "price_range": [0, 200]}}]},
-    {"role": "user", "content": "Add the first result to cart"},
-    {"role": "assistant", "tool_calls": [{"tool": "add_to_cart", "params": {"product_id": "prod_123", "quantity": 1}}]},
-    {"role": "user", "content": "Apply code WINTER20"},
-    {"role": "assistant", "tool_calls": [{"tool": "apply_coupon", "params": {"code": "WINTER20"}}]},
-    {"role": "user", "content": "Proceed to checkout with credit card"},
-    {"role": "assistant", "tool_calls": [{"tool": "checkout", "params": {"payment_method": "credit_card"}}]}
-  ]
+  "text": "User: What's the weather like in Tokyo right now?\nExpected tool: get_weather\nExpected args: {\"city\": \"Tokyo\"}\nAssistant: I'll check the current weather in Tokyo for you.",
+  "expected_tool": "get_weather",
+  "expected_args": {"city": "Tokyo"}
 }
+```
+
+**Generation**:
+```bash
+python scripts/generate_synthetic.py --num-samples 40000 --seed 42
 ```
 
 ## Data Format
 
-### Standardized Format (ChatML)
-All datasets converted to unified chat format:
+### Unified Text Format
+All datasets are normalized to a unified `text` column (plus `source` metadata) before tokenization.
+The normalization is handled by `_normalize_to_text()` in `src/data_loader.py`.
 
+Each source schema is converted differently:
+
+| Source | Input Fields | Text Output |
+|--------|-------------|-------------|
+| Synthetic | `text` (already present) | As-is |
+| APIBench | `domain`, `api_call`, `api_data` | `domain: ...\napi_call: ...\napi_data: {...}` |
+| ToolBench | `query`, `api_list`, `relevant_apis` | `query: ...\napi_list: [...]\nrelevant_apis: [...]` |
+| BFCL | `question`, `function` | `question: [...]\nfunction: [...]` |
+
+After normalization, only `text` and `source` columns remain. Tokenization produces `input_ids`, `attention_mask`, and `labels`.
+
+### Tokenized Format (Arrow files in data/processed/)
 ```json
 {
-  "id": "sample_12345",
-  "source": "api-bank",
-  "messages": [
-    {
-      "role": "system",
-      "content": "You are a helpful assistant with access to the following tools..."
-    },
-    {
-      "role": "user",
-      "content": "Get the weather in San Francisco and New York",
-      "tools": [
-        {
-          "type": "function",
-          "function": {
-            "name": "get_weather",
-            "description": "Get current weather for a city",
-            "parameters": {
-              "type": "object",
-              "properties": {
-                "city": {"type": "string", "description": "City name"},
-                "units": {"type": "string", "enum": ["C", "F"]}
-              },
-              "required": ["city"]
-            }
-          }
-        }
-      ]
-    },
-    {
-      "role": "assistant",
-      "content": "I'll get the weather for both cities.",
-      "tool_calls": [
-        {
-          "id": "call_1",
-          "type": "function",
-          "function": {"name": "get_weather", "arguments": "{\"city\": \"San Francisco\", \"units\": \"F\"}"}
-        },
-        {
-          "id": "call_2",
-          "type": "function",
-          "function": {"name": "get_weather", "arguments": "{\"city\": \"New York\", \"units\": \"F\"}"}
-        }
-      ]
-    },
-    {
-      "role": "user",
-      "content": "[{\"id\": \"call_1\", \"result\": {\"temperature\": 72, \"condition\": \"sunny\"}}, {\"id\": \"call_2\", \"result\": {\"temperature\": 65, \"condition\": \"cloudy\"}}]"
-    },
-    {
-      "role": "assistant",
-      "content": "San Francisco is 72°F and sunny, while New York is 65°F and cloudy."
-    }
-  ]
+  "input_ids": [151643, 2610, ...],
+  "attention_mask": [1, 1, ...],
+  "labels": [151643, 2610, ...]
 }
 ```
 
@@ -191,66 +137,67 @@ All datasets converted to unified chat format:
 
 ### Data Distribution
 ```
-Training Set:   32,000 samples (80%)
-Validation Set:  4,000 samples (10%)
-Test Set:        4,000 samples (10%)
+Raw Loaded:     20,458 samples
+After Dedup:    14,382 samples
+After Balance:   3,804 samples (~951 per source)
+
+Training Set:    3,043 samples (80%)
+Validation Set:    380 samples (10%)
+Test Set:          381 samples (10%)
 ```
 
-### Tool Coverage
-- **Unique Tools**: 487
-- **Tool Categories**: 12 (API, fintech, e-commerce, etc.)
-- **Max Tools per Example**: 5
-- **Avg Tools per Example**: 2.3
+### Source Distribution (before balancing)
+```
+api_bank:   1,644  (11.4%)
+toolbench:    200  ( 1.4%)
+gorilla:      258  ( 1.8%)
+synthetic: 12,280  (85.4%)
+```
 
 ### Sequence Length
 ```
-Mean Input Length:    380 tokens
-Median Input Length:  320 tokens
-Max Input Length:     2048 tokens
-
-Mean Output Length:   180 tokens
-Median Output Length: 150 tokens
-Max Output Length:    500 tokens
+Max Token Length: 2048 (truncated at tokenization)
 ```
 
 ### Language
-- **Primary**: English (97%)
-- **Secondary**: Spanish, French, Chinese (3% mixed)
+- **Primary**: English (100% — all sources are English)
 
 ## Data Processing Pipeline
 
 ### Steps
-1. **Download**: Fetch from HF Hub or API
-2. **Clean**: Remove duplicates, invalid JSON, incomplete sequences
-3. **Normalize**: Standardize tool call format
-4. **Validate**: Schema validation, type checking
-5. **Augment**: Add synthetic data
-6. **Split**: 80/10/10 train/val/test
-7. **Tokenize**: Prepare for training
-8. **Upload**: Push to HF Hub as versioned dataset
+1. **Generate Synthetic**: `python scripts/generate_synthetic.py` → JSONL files in `data/raw/synthetic/`
+2. **Load All Sources**: HF datasets downloaded to `hf_cache/` (gitignored); local synthetics read from disk
+3. **Normalize**: Convert all schemas to unified `text` column via `_normalize_to_text()`
+4. **Deduplicate**: MD5 hash of full row, keep first occurrence
+5. **Filter**: Remove incomplete examples (no meaningful content fields)
+6. **Balance**: Median-target resampling (oversample small sources, undersample large)
+7. **Split**: 80/10/10 train/validation/test
+8. **Tokenize**: Qwen3-8B tokenizer, max_length=2048, padding to max_length
+9. **Save**: Arrow format in `data/processed/{train,validation,test}/`
 
 ### Quality Checks
-✅ Schema validation (jsonschema)
 ✅ No duplicate examples (MD5 hash)
-✅ Tool call executability (simulated)
-✅ Language detection
-✅ Token count bounds
-✅ Balanced tool distribution
+✅ All rows have at least one meaningful content field
+✅ Whitespace normalized
+✅ Balanced source representation via median-target resampling
+✅ Deterministic with seed=42
 
 ## Data Access
 
-### Download
-```bash
-# Via Hugging Face Datasets library
-from datasets import load_dataset
+### Load Processed Dataset
+```python
+from datasets import load_from_disk
 
-dataset = load_dataset("dhruvanmurthy/qwen3-8b-tool-use", split="train")
+ds = load_from_disk("data/processed")
+print(ds["train"].column_names)  # ['input_ids', 'attention_mask', 'labels']
+print(len(ds["train"]))          # ~3,043
 ```
 
-### Versioning
-- **Latest**: v1.0 (March 2026)
-- **Previous**: v0.9 (dev version)
-- **DVC**: Tracked in `data/` directory with `.dvc` files
+### Regenerate from Scratch
+```bash
+rm -rf data/processed data/raw/synthetic/*.jsonl
+bash scripts/prepare_datasets.sh
+```
 
 ## Licensing & Attribution
 
@@ -271,11 +218,11 @@ dataset = load_dataset("dhruvanmurthy/qwen3-8b-tool-use", split="train")
 - ✅ No sensitive credentials in examples
 
 ### Potential Harms
-1. **Synthetic Data Artifacts**: Generated examples may not reflect real user behavior
-   - Mitigation: Balanced mix with real data (75%)
-2. **API Bias**: Overrepresentation of popular APIs (Google, Stripe, AWS)
-   - Mitigation: Intentional balancing across 487 unique tools
-3. **Language Bias**: Primarily English; multilingual support limited
+1. **Synthetic Data Artifacts**: Template-generated examples may not reflect real user behavior
+   - Mitigation: Balanced mix with real HF datasets (~15% of final data)
+2. **Small Real-Data Sources**: ToolBench (200) and BFCL (258) are oversampled
+   - Mitigation: Median-target balancing avoids extreme imbalance
+3. **Language Bias**: English only
    - Mitigation: Flagged in model card; future work planned
 
 ### Bias Analysis
@@ -286,24 +233,23 @@ dataset = load_dataset("dhruvanmurthy/qwen3-8b-tool-use", split="train")
 ## Data Versioning & Reproducibility
 
 ### Version Control
-- **Git**: Code in GitHub
-- **DVC**: Dataset snapshots in `data/` (`.dvc` files)
-- **HF Hub**: Versioned dataset releases
+- **Git**: Code and configs in Git
+- **Gitignored**: `hf_cache/`, `data/processed/`, `data/raw/synthetic/` outputs
 
 ### Reproducibility Checklist
-✅ All preprocessing scripts in `scripts/prepare_datasets.sh`
-✅ Random seeds fixed (42) for any sampling
-✅ Exact dataset versions pinned
+✅ All preprocessing in `scripts/prepare_datasets.sh` + `src/data_loader.py`
+✅ Synthetic generation in `scripts/generate_synthetic.py` with `--seed 42`
+✅ Random seed fixed (42) for all sampling, splitting, and balancing
+✅ Dataset source URLs and configs pinned in `configs/dataset_config.yaml`
 ✅ License attribution preserved
-✅ Processing configs versioned (YAML)
 
 ## Known Limitations
 
-1. **Format Diversity**: Primarily ChatML format; OpenAI function calling influenced
-2. **Domain Coverage**: Overweighted toward common APIs (e.g., weather, email)
-3. **Error Cases**: Limited error handling examples (~5% of data)
-4. **Multilingual**: Primarily English; non-English performance unknown
-5. **Tool Coverage**: 487 tools may not generalize to all possible APIs
+1. **Small Real-Data Pool**: Only ~458 unique real examples (200 ToolBench + 258 BFCL) survive dedup; oversampled during balancing
+2. **Format**: Unified text column (not structured ChatML); tool call format varies by source
+3. **Domain Coverage**: Synthetic data covers common tools (weather, stocks, translation); real data adds API documentation
+4. **English Only**: No multilingual examples
+5. **No Error Cases**: Limited error handling / negative examples
 
 ## Future Improvements
 
