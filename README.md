@@ -232,6 +232,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## Contact
 
-**Author**: Dhruvan Murthy  
+**Author**: Dhruva N  
 **GitHub**: [@dhruvanmurthy](https://github.com/dhruvanmurthy)  
 **HuggingFace**: [dhruvanmurthy](https://huggingface.co/dhruvanmurthy)
