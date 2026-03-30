@@ -157,43 +157,23 @@ report_to:
 
 ### Step 1: Data Preparation
 
-```python
-# Pseudo-code, see src/data_loader.py for details
-
-from datasets import load_dataset, concatenate_datasets
-
-# Load all datasets
-api_bank = load_dataset("api-bank", split="train")
-toolbench = load_dataset("toolbench", split="train")
-gorilla = load_dataset("gorilla", split="train")
-# ... synthetic data ...
-
-# Merge with balanced sampling
-dataset = concatenate_datasets([
-    api_bank.select(range(5000)),
-    toolbench.select(range(15000)),
-    gorilla.select(range(5000)),
-    synthetic.select(range(15000))
-])
-
-# Shuffle and split
-dataset = dataset.shuffle(seed=42)
-split_data = dataset.train_test_split(test_size=0.2)
-train_data = split_data["train"]
-eval_data = split_data["test"]
-
-# Tokenize
-def tokenize(batch):
-    return tokenizer(
-        batch["text"],
-        truncation=True,
-        max_length=2048,
-        padding="max_length"
-    )
-
-train_data = train_data.map(tokenize, batched=True)
-eval_data = eval_data.map(tokenize, batched=True)
+```bash
+# Run the full pipeline (generate synthetic + load HF datasets + preprocess)
+bash scripts/prepare_datasets.sh
 ```
+
+This produces Arrow-format datasets in `data/processed/`:
+- `train/` (~3,043 samples)
+- `validation/` (~380 samples)
+- `test/` (~381 samples)
+
+Sources loaded:
+- `gorilla-llm/APIBench` (5,000 → ~1,644 after dedup)
+- `tuandunghcmut/toolbench-v1` benchmark split (200 rows)
+- `gorilla-llm/Berkeley-Function-Calling-Leaderboard` (258 rows)
+- Synthetic via `scripts/generate_synthetic.py` (15,000 sampled → ~12,280 after dedup)
+
+After median-target balancing (~951 per source), the final training set is ~3,043 samples.
 
 ### Step 2: Model Setup
 

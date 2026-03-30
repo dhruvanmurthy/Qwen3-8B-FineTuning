@@ -14,6 +14,9 @@
 
 set -e
 
+# Always run from the repo root
+cd "$(dirname "$0")/.." 
+
 STAGE="${1:-all}"
 BASE_MODEL="${BASE_MODEL:-Qwen/Qwen3-8B}"
 SFT_OUTPUT="${SFT_OUTPUT:-./outputs/sft}"
@@ -34,7 +37,7 @@ echo "============================================="
 if [[ "$STAGE" == "baseline" || "$STAGE" == "all" ]]; then
     echo ""
     echo ">>> Stage 0: Baseline Evaluation"
-    python src/evaluate.py \
+    python3 src/evaluate.py \
         --mode baseline \
         --base-model "$BASE_MODEL" \
         --output outputs/eval_baseline.json
@@ -46,7 +49,7 @@ fi
 if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
     echo ""
     echo ">>> Stage 1: SFT Training"
-    python src/train.py \
+    python3 src/train.py \
         --model_name_or_path "$BASE_MODEL" \
         --output_dir "$SFT_OUTPUT" \
         --num_train_epochs 3 \
@@ -69,7 +72,7 @@ if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
 
     echo ""
     echo ">>> Stage 1: SFT Evaluation"
-    python src/evaluate.py \
+    python3 src/evaluate.py \
         --mode sft \
         --base-model "$BASE_MODEL" \
         --sft-adapter "$SFT_OUTPUT" \
@@ -82,7 +85,7 @@ fi
 if [[ "$STAGE" == "grpo" || "$STAGE" == "all" ]]; then
     echo ""
     echo ">>> Stage 2: GRPO Training (LoRA r=32, LR 3e-5, batch 128, group 16, 50 steps)"
-    python src/train_grpo.py \
+    python3 src/train_grpo.py \
         --sft-adapter-path "$SFT_OUTPUT" \
         --base-model-name "$BASE_MODEL" \
         --output-dir "$GRPO_OUTPUT" \
@@ -96,7 +99,7 @@ if [[ "$STAGE" == "grpo" || "$STAGE" == "all" ]]; then
 
     echo ""
     echo ">>> Stage 2: GRPO Evaluation"
-    python src/evaluate.py \
+    python3 src/evaluate.py \
         --mode grpo \
         --base-model "$BASE_MODEL" \
         --sft-adapter "$SFT_OUTPUT" \
@@ -110,7 +113,7 @@ fi
 if [[ "$STAGE" == "compare" || "$STAGE" == "all" ]]; then
     echo ""
     echo ">>> Stage 3: Cross-Stage Comparison"
-    python src/evaluate.py \
+    python3 src/evaluate.py \
         --mode compare \
         --base-model "$BASE_MODEL" \
         --sft-adapter "$SFT_OUTPUT" \

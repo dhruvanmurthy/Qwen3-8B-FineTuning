@@ -4,127 +4,130 @@ Complete guide to aggregating, preprocessing, and versioning datasets for tool-u
 
 ## Dataset Overview
 
-**Total Target**: 40,000 training samples
-**Strategy**: Mix of real + synthetic data for diversity
-**Format**: Unified ChatML (OpenAI function calling format)
-**Time to Prepare**: ~2-3 hours (automated via `prepare_datasets.sh`)
+**Total Loaded**: ~20,458 raw samples → ~3,043 training after dedup + balancing
+**Strategy**: Mix of real HF datasets + locally generated synthetic data
+**Format**: Unified `text` column (normalized from heterogeneous schemas)
+**Time to Prepare**: ~5 minutes (automated via `prepare_datasets.sh`)
 
 ## Source Datasets
 
-### 1. API-Bank (5,000 samples)
+### 1. APIBench (5,000 samples)
 
-**Homepage**: https://huggingface.co/datasets/apibench/api-bank
+**Homepage**: https://huggingface.co/datasets/gorilla-llm/APIBench
 **Characteristics**:
-- Real API calls with execution results
-- Multi-step sequences (1-3 API calls)
-- Long context (API documentation)
-- Diverse APIs (weather, translation, etc.)
+- Real API documentation from TorchHub, HuggingFace, and TensorFlow
+- API call + domain + structured api_data
+- Mixed-type `api_arguments` field (requires pandas fallback loader)
+- Single API calls with parameter specifications
 
 **Acquisition**:
 ```bash
+# Loaded via data_loader.py with pandas fallback (ArrowInvalid on default loader)
+# Individual files: torchhub_train.json, huggingface_train.json, tensorflow_train.json
 python -c "
 from datasets import load_dataset
-api_bank = load_dataset('apibench/api-bank')
-print(api_bank['train'][0])
+ds = load_dataset('gorilla-llm/APIBench', data_files='torchhub_train.json', split='train')
+print(ds[0])
 "
 ```
+
+**Schema (columns)**:
+- `domain`: API framework (e.g., "Image Classification")
+- `api_call`: The API invocation string
+- `api_data`: Structured data with `api_name`, `api_arguments`, `description`, etc.
 
 **Example**:
 ```json
 {
-  "instruction": "I want to translate 'Good Morning' to Korean and get the current weather in Seoul",
-  "tools": [
-    {"name": "translate", "description": "Translate text", "params": {"text": "...", "target_lang": "..."}},
-    {"name": "get_weather", "description": "Get weather", "params": {"city": "..."}}
-  ],
-  "api_calls": [
-    {"tool": "translate", "params": {"text": "Good Morning", "target_lang": "Korean"}},
-    {"tool": "get_weather", "params": {"city": "Seoul"}}
-  ],
-  "results": [
-    "안녕하세요",
-    {"temperature": 18, "condition": "cloudy"}
-  ],
-  "final_response": "The translation is '안녕하세요' and Seoul is 18°C, cloudy."
-}
-```
-
-**Selection**: Use first 5,000 samples (stratified by API type)
-
-### 2. ToolBench (15,000 samples)
-
-**Homepage**: https://huggingface.co/datasets/ToolBench/toolbench
-**Characteristics**:
-- Tool selection from large catalogs (100+ tools)
-- Multi-step reasoning chains
-- User instruction only (no execution results)
-- Diverse categories (e-commerce, travel, etc.)
-
-**Acquisition**:
-```bash
-# Download from source
-python -c "
-from datasets import load_dataset
-toolbench = load_dataset('ToolBench/toolbench', 'G1_instructions')
-print(len(toolbench), toolbench['train'][0].keys())
-"
-```
-
-**Example**:
-```json
-{
-  "user_instruction": "I need to book a round-trip flight from NYC to LA for June 10-15",
-  "available_tools": [
-    {"name": "search_flights", "description": "...", "params": [...]},
-    {"name": "book_flight", "description": "...", "params": [...]},
-    {"name": "check_prices", "description": "...", "params": [...]}
-  ],
-  "expected_calls": [
-    {"tool": "search_flights", "params": {"from": "NYC", "to": "LA", "date": "2024-06-10"}},
-    {"tool": "check_prices", "params": {...}},
-    {"tool": "book_flight", "params": {...}}
-  ],
-  "answer": "I found flights and booking completed."
-}
-```
-
-**Selection**: Balanced sample from all categories, ~15,000 total
-
-### 3. Gorilla (5,000 samples)
-
-**Homepage**: https://huggingface.co/datasets/gorilla-llm/gorilla-dataset
-**Characteristics**:
-- Real API documentation
-- Focused on parameter correctness
-- Single function calls (not chains)
-- Wide API coverage (1,645 unique APIs)
-
-**Acquisition**:
-```bash
-python -c "
-from datasets import load_dataset
-gorilla = load_dataset('gorilla-llm/gorilla-dataset', 'api_domain')
-print(gorilla['eval'][0])
-"
-```
-
-**Example**:
-```json
-{
-  "api_name": "stripe.charge.create",
-  "api_doc": "Create a charge with the given amount and currency.",
-  "user_instruction": "Charge $99.99 to customer cus_12345 with description 'Premium Plan'",
-  "correct_api_call": "stripe.charge.create(amount=9999, currency='usd', customer='cus_12345', description='Premium Plan')",
-  "parameters": {
-    "amount": 9999,
-    "currency": "usd",
-    "customer": "cus_12345",
-    "description": "Premium Plan"
+  "domain": "Image Classification",
+  "api_call": "hub.load('pytorch/vision', 'resnet18', pretrained=True)",
+  "api_data": {
+    "api_name": "resnet18",
+    "api_arguments": {"pretrained": true},
+    "description": "ResNet-18 model pre-trained on ImageNet"
   }
 }
 ```
 
-**Selection**: Stratified by API domain, ~5,000 samples
+**Selection**: All 5,000 samples across 3 files (torchhub + huggingface + tensorflow)
+
+### 2. ToolBench (200 samples)
+
+**Homepage**: https://huggingface.co/datasets/tuandunghcmut/toolbench-v1
+**Characteristics**:
+- Tool selection from large API catalogs
+- User queries with relevant API lists
+- Benchmark config, `g1_instruction` split (200 rows available)
+- Diverse categories (data, sports, streaming, etc.)
+
+**Acquisition**:
+```bash
+python -c "
+from datasets import load_dataset
+toolbench = load_dataset('tuandunghcmut/toolbench-v1', 'benchmark', split='g1_instruction')
+print(len(toolbench), toolbench.column_names)
+"
+```
+
+**Schema (columns)**:
+- `query_id`: Unique identifier
+- `query`: User instruction/question
+- `api_list`: JSON list of available API tools with descriptions and parameters
+- `relevant_apis`: List of [tool_name, api_name] pairs for the correct answer
+
+**Example**:
+```json
+{
+  "query_id": 577,
+  "query": "I am a fitness enthusiast and I want to buy a fitness tracker. Can you suggest some top-rated fitness trackers?",
+  "api_list": [{"category_name": "Data", "tool_name": "ASIN Data", "api_name": "Category", ...}],
+  "relevant_apis": [["ASIN Data", "Search"], ["ASIN Data", "Product"]]
+}
+```
+
+**Selection**: All 200 available rows from the benchmark/g1_instruction split
+
+> **Note**: The benchmark split only has 200 rows. The `default` config has ~187k rows
+> but uses a different schema. Small sources are oversampled during balancing.
+
+### 3. Gorilla BFCL (258 samples)
+
+**Homepage**: https://huggingface.co/datasets/gorilla-llm/Berkeley-Function-Calling-Leaderboard
+**Characteristics**:
+- Function calling benchmark with parameter correctness focus
+- Nested question format (`[[{role, content}]]`) + function definitions
+- Mixed-type columns across JSON files (requires pandas fallback loader)
+- Single function calls with detailed schemas
+
+**Acquisition**:
+```bash
+# Loaded via data_loader.py with pandas fallback (ArrowInvalid on default loader)
+# Uses specific data_files to avoid mixed-column issues across JSON files
+python -c "
+from datasets import load_dataset
+ds = load_dataset('gorilla-llm/Berkeley-Function-Calling-Leaderboard',
+                  data_files='BFCL_v3_live_simple.json', split='train')
+print(ds[0])
+"
+```
+
+**Schema (columns)**:
+- `id`: Example identifier (e.g., "live_simple_0-0-0")
+- `question`: Nested list `[[{role, content}]]` with user query
+- `function`: List of function definitions with name, description, parameters
+
+**Example**:
+```json
+{
+  "id": "live_simple_0-0-0",
+  "question": [[{"role": "user", "content": "Can you retrieve the details for user ID 7890?"}]],
+  "function": [{"name": "get_user_info", "description": "Retrieve details for a specific user",
+    "parameters": {"type": "dict", "required": ["user_id"],
+      "properties": {"user_id": {"type": "integer", "description": "The unique identifier"}}}}]
+}
+```
+
+**Selection**: All 258 rows from `BFCL_v3_live_simple.json`
 
 ### 4. Synthetic Data (15,000 samples)
 
@@ -198,84 +201,46 @@ messages:
     content: "Final response..."
 ```
 
-### Conversion Function
-
-```python
-def convert_to_chatml(example: dict, source: str) -> dict:
-    """Convert any source format to ChatML."""
-    if source == "api-bank":
-        return {
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": example["instruction"],
-                 "tools": example["tools"]},
-                {"role": "assistant", "content": "",
-                 "tool_calls": example["api_calls"]},
-                {"role": "user", "content": str(example["results"])},
-                {"role": "assistant", "content": example["final_response"]}
-            ]
-        }
-    elif source == "toolbench":
-        return {
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": example["user_instruction"],
-                 "tools": example["available_tools"]},
-                {"role": "assistant", "content": "",
-                 "tool_calls": example["expected_calls"]},
-                {"role": "assistant", "content": example["answer"]}
-            ]
-        }
-    # ... more sources
-```
-
-## Preprocessing Pipeline
-
-### Step 1: Download All Datasets
-
-```bash
-bash scripts/prepare_datasets.sh
-```
+## Preprocessing Pipeline\n\n### Step 1: Generate Synthetic Data & Download HF Datasets\n\n```bash\nbash scripts/prepare_datasets.sh\n```\n\nThis runs two steps:\n1. `python scripts/generate_synthetic.py` → generates JSONL files in `data/raw/synthetic/`\n2. `python -c \"...\"` → loads all sources, normalizes, deduplicates, balances, splits, tokenizes
 
 **Output**: `data/raw/` with subdirectories:
-- `data/raw/api-bank/`
-- `data/raw/toolbench/`
-- `data/raw/gorilla/`
-- `data/raw/synthetic/`
+- `data/raw/synthetic/` (JSONL files generated by `scripts/generate_synthetic.py`)
+
+HF datasets are downloaded to `hf_cache/` (gitignored) and loaded on-the-fly.
 
 ### Step 2: Clean & Normalize
 
-The `prepare_datasets.sh` script handles cleaning automatically.
+The `prepare_datasets.sh` script handles cleaning automatically via `data_loader.py`.
 
 **Operations**:
-- Remove duplicates (MD5)
-- Validate JSON schema
-- Remove incomplete examples
+- Remove duplicates (MD5 hash of full row)
+- Validate completeness (at least one meaningful content field)
 - Normalize whitespace
-- Extract language (filter non-English if needed)
+- Convert all schemas to unified `text` column via `_normalize_to_text()`
 
-### Step 3: Convert to ChatML
+### Step 3: Normalize to Text
 
-The pipeline script converts all sources into unified ChatML format.
+All sources are converted to a unified `text` column (not ChatML messages).
+The normalizer handles each source's schema:
 
-**Output**: `data/processed/dataset_all.jsonl` (40,000 examples)
+| Source | Fields Used | Text Format |
+|--------|------------|-------------|
+| Synthetic | `text` (already present) | As-is |
+| APIBench | `domain`, `api_call`, `api_data` | `domain: ...\napi_call: ...\napi_data: ...` |
+| ToolBench | `query`, `api_list`, `relevant_apis` | `query: ...\napi_list: [...]\nrelevant_apis: [...]` |
+| BFCL | `question`, `function` | `question: [...]\nfunction: [...]` |
 
-Each line is a JSON object:
-```json
-{"messages": [...], "source": "api-bank", "id": "..."}
-```
+### Step 4: Balance, Split & Tokenize
 
-### Step 4: Tokenize & Create HF Dataset
+After normalization, the pipeline:
+1. **Balances sources** using median-target resampling (small sources oversampled, large undersampled)
+2. **Splits** into train (80%) / validation (10%) / test (10%)
+3. **Tokenizes** to `max_length=2048`
 
-Tokenization happens automatically during training via `ToolUseDataLoader.tokenize_dataset()`.
-The data loader can also save a preprocessed HF Dataset to disk:
-
-**Output**: Hugging Face Dataset object in `data/processed/hf_dataset/`
-- `train/` (32,000 samples)
-- `validation/` (4,000 samples)
-- `test/` (4,000 samples)
-
-All pre-tokenized to max_length=2048
+**Output**: HuggingFace Dataset (Arrow format) in `data/processed/`
+- `data/processed/train/` (~3,043 samples)
+- `data/processed/validation/` (~380 samples)
+- `data/processed/test/` (~381 samples)
 
 ### Step 5: Upload to Hub (Optional)
 
@@ -293,48 +258,64 @@ Create `configs/dataset_config.yaml`:
 
 ```yaml
 sources:
-  api-bank:
-    url: "apibench/api-bank"
-    type: huggingface
-    split: train
+  api_bank:
+    enabled: true
+    name: "API-Bank"
+    url: "gorilla-llm/APIBench"
+    type: "huggingface"
+    split: "train"
     samples: 5000
+    config: null
     weight: 1.0
+    data_files:
+      - "torchhub_train.json"
+      - "huggingface_train.json"
+      - "tensorflow_train.json"
 
   toolbench:
-    url: "ToolBench/toolbench"
-    type: huggingface
-    split: train
-    config: "G1_instructions"
+    enabled: true
+    name: "ToolBench"
+    url: "tuandunghcmut/toolbench-v1"
+    type: "huggingface"
+    split: "g1_instruction"
+    config: "benchmark"
     samples: 15000
     weight: 1.0
 
   gorilla:
-    url: "gorilla-llm/gorilla-dataset"
-    type: huggingface
-    split: eval
-    config: "api_domain"
+    enabled: true
+    name: "Gorilla"
+    url: "gorilla-llm/Berkeley-Function-Calling-Leaderboard"
+    type: "huggingface"
+    split: "train"
+    config: null
     samples: 5000
     weight: 1.0
+    data_files:
+      - "BFCL_v3_live_simple.json"
 
   synthetic:
-    url: "./data/raw/synthetic/"
-    type: local
+    enabled: true
+    name: "Synthetic"
+    path: "./data/raw/synthetic/"
+    type: "local"
     samples: 15000
     weight: 1.0
 
 preprocessing:
-  max_length: 2048
-  min_length: 50
+  max_seq_length: 2048
+  min_seq_length: 50
   remove_duplicates: true
+  dedup_method: "md5"
   remove_incomplete: true
   remove_non_english: false
-  balance_sources: true
 
 splits:
   train: 0.8
   validation: 0.1
   test: 0.1
 
+balance_sources: true
 seed: 42
 ```
 
@@ -430,22 +411,22 @@ for lang, count in langs.most_common():
 ### Expected Output
 
 ```
-Total examples: 40000
-Avg tokens per example: 487
-Max tokens: 2048
-Tool calls per example: 2.31
+Total loaded: ~20,458
+After dedup: ~14,382
 
-Source distribution:
-- api-bank: 5000 (12.5%)
-- toolbench: 15000 (37.5%)
-- gorilla: 5000 (12.5%)
-- synthetic: 15000 (37.5%)
+Source distribution (before balancing):
+- api_bank: 1,644 (11.4%)
+- toolbench: 200 (1.4%)
+- gorilla: 258 (1.8%)
+- synthetic: 12,280 (85.4%)
 
-Language distribution:
-- en: 38800 (97%)
-- es: 600 (1.5%)
-- fr: 400 (1%)
-- other: 200 (0.5%)
+After median-target balancing (~951 per source):
+- Total: ~3,804
+
+Final splits:
+- Train: ~3,043 (80%)
+- Validation: ~380 (10%)
+- Test: ~381 (10%)
 ```
 
 ## Accessing in Training
@@ -473,24 +454,30 @@ dataset = table.to_pandas()
 
 ## Balancing & Sampling Strategies
 
-### Stratified Sampling (by source)
+### Median-Target Resampling (Current Approach)
+
+The `_balance_sources` method uses the **median** source count as the target
+(not the minimum), which avoids collapsing the dataset when one source is tiny.
+
+- Sources smaller than the median are **oversampled** (with replacement)
+- Sources larger than the median are **undersampled** (without replacement)
+- Floor: at least 500 samples per source (or the max if all are smaller)
 
 ```python
-from datasets import load_dataset
+# From src/data_loader.py — _balance_sources
+counts = sorted(source_counts.values())
+median = counts[n // 2]
+target_count = max(median, min(500, max(counts)))
 
-dataset = load_dataset("dhruvanmurthy/qwen3-8b-tool-use", split="train")
-
-# Equal contribution from each source
-for source in ["api-bank", "toolbench", "gorilla", "synthetic"]:
-    subset = dataset.filter(lambda x: x["source"] == source)
-    print(f"{source}: {len(subset)}")
-
-# Balance to smallest source (5,000)
-balanced = []
-for source in ["api-bank", "toolbench", "gorilla", "synthetic"]:
-    subset = dataset.filter(lambda x: x["source"] == source)
-    balanced.extend(subset.select(range(min(5000, len(subset)))))
+for source_name in source_counts:
+    subset = dataset.filter(lambda x: x["source"] == source_name)
+    if len(subset) >= target_count:
+        indices = np.random.choice(len(subset), target_count, replace=False)
+    else:
+        indices = np.random.choice(len(subset), target_count, replace=True)  # oversample
 ```
+
+This is controlled by `balance_sources: true` in `dataset_config.yaml`.
 
 ### Curriculum Learning (Optional)
 

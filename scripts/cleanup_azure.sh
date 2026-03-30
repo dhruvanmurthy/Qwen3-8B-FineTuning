@@ -4,6 +4,9 @@
 
 set -e
 
+# Always run from the repo root
+cd "$(dirname "$0")/.." 
+
 RESOURCE_GROUP="${AZURE_RESOURCE_GROUP:-qwen3-finetuning}"
 
 echo "================================================"

@@ -98,6 +98,7 @@ azure_output/
 
 # HuggingFace Cache
 huggingface_cache/
+hf_cache/
 .cache/
 
 # OS

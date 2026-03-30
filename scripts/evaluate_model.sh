@@ -6,7 +6,7 @@ BASE_MODEL="${BASE_MODEL:-Qwen/Qwen3-8B}"
 SFT_ADAPTER="${SFT_ADAPTER:-./outputs/sft}"
 GRPO_ADAPTER="${GRPO_ADAPTER:-./outputs/grpo}"
 
-python src/evaluate.py \
+python3 src/evaluate.py \
     --mode "$MODE" \
     --base-model "$BASE_MODEL" \
     --sft-adapter "$SFT_ADAPTER" \

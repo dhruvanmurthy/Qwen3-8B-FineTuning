@@ -1,0 +1,37 @@
+name: qwen3-env
+channels:
+  - conda-forge
+  - pytorch
+  - nvidia
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - torch==2.2.2
+      - transformers==4.46.3
+      - datasets==2.21.0
+      - accelerate==0.34.0
+      - peft==0.11.1
+      - bitsandbytes==0.43.1
+      - deepspeed>=0.14.0
+      - trl==0.14.0
+      - wandb==0.16.6
+      - tensorboard==2.16.2
+      - azure-identity==1.14.0
+      - azure-storage-blob==12.19.0
+      - azure-ai-ml==1.12.1
+      - azure-keyvault-secrets==4.7.0
+      - "huggingface-hub>=0.23.2,<1.0"
+      - pandas==2.2.0
+      - numpy==1.26.4
+      - scikit-learn==1.4.2
+      - tqdm==4.66.4
+      - python-dotenv==1.0.0
+      - pyyaml==6.0.1
+      - rouge-score==0.1.2
+      - nltk==3.8.1
+      - evaluate==0.4.1
+      - structlog==24.1.0
+      - loguru==0.7.2
+      - optimum==1.17.0

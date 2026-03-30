@@ -5,6 +5,7 @@ Handles dataset loading, tokenization, and formatting.
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -37,15 +38,29 @@ class ToolUseDataLoader:
                 continue
 
             logger.info(f"Loading {source_name}...")
-            dataset = self.load_single_dataset(source_name, source_config)
+            try:
+                dataset = self.load_single_dataset(source_name, source_config)
 
-            # Add source metadata
-            dataset = dataset.map(
-                lambda x: {**x, "source": source_name},
-                desc=f"Adding source metadata for {source_name}"
+                # Add source metadata
+                _sname = source_name  # capture for lambda closure
+                dataset = dataset.map(
+                    lambda x, s=_sname: {**x, "source": s},
+                    desc=f"Adding source metadata for {source_name}"
+                )
+
+                datasets.append(dataset)
+                logger.info(f"✓ Loaded {source_name}: {len(dataset)} examples")
+            except Exception as exc:
+                logger.warning(
+                    f"⚠ Skipping {source_name}: {exc}. "
+                    "Check HF access / network / local path and rerun if needed."
+                )
+
+        if not datasets:
+            raise RuntimeError(
+                "No datasets were successfully loaded. "
+                "Check HF_TOKEN, network connectivity, and data/raw/synthetic/ contents."
             )
-
-            datasets.append(dataset)
 
         # Concatenate
         logger.info("Concatenating datasets...")
@@ -68,24 +83,37 @@ class ToolUseDataLoader:
         split = config.get("split", "train")
         dataset_config = config.get("config", None)
         samples = config.get("samples", None)
+        data_files = config.get("data_files", None)
 
         logger.info(f"Loading {url} ({split})...")
 
+        hf_token = os.getenv("HF_TOKEN") or None
+
+        kwargs = dict(
+            cache_dir=self.cache_dir,
+            trust_remote_code=True,
+            token=hf_token,
+        )
+        if data_files:
+            kwargs["data_files"] = data_files
         if dataset_config:
-            dataset = load_dataset(
-                url,
-                dataset_config,
-                split=split,
-                cache_dir=self.cache_dir,
-                trust_remote_code=True
-            )
+            args = (url, dataset_config)
         else:
-            dataset = load_dataset(
-                url,
-                split=split,
-                cache_dir=self.cache_dir,
-                trust_remote_code=True
-            )
+            args = (url,)
+
+        try:
+            dataset = load_dataset(*args, split=split, **kwargs)
+        except Exception as first_err:
+            # Fallback for mixed-schema JSON: load each file individually
+            # via pandas which is more lenient, then combine.
+            if data_files:
+                logger.info(
+                    f"Default loader failed ({first_err}); "
+                    "falling back to per-file pandas load..."
+                )
+                dataset = self._load_files_via_pandas(url, data_files, hf_token)
+            else:
+                raise first_err
 
         # Limit samples
         if samples and len(dataset) > samples:
@@ -94,6 +122,39 @@ class ToolUseDataLoader:
 
         logger.info(f"Loaded {len(dataset)} examples from {url}")
         return dataset
+
+    def _load_files_via_pandas(
+        self, repo_id: str, data_files: List[str], token: str | None
+    ) -> Dataset:
+        """Download individual files from a HF dataset repo and load via
+        pandas to tolerate mixed-schema JSON fields."""
+        import pandas as pd
+        from huggingface_hub import hf_hub_download
+
+        frames = []
+        for fname in data_files:
+            local = hf_hub_download(
+                repo_id=repo_id,
+                filename=fname,
+                repo_type="dataset",
+                cache_dir=self.cache_dir,
+                token=token,
+            )
+            # Read as line-delimited JSON (each line is one object)
+            try:
+                df = pd.read_json(local, lines=True)
+            except ValueError:
+                # Some files are regular JSON arrays
+                df = pd.read_json(local)
+            frames.append(df)
+
+        combined = pd.concat(frames, ignore_index=True)
+        # Convert every column to string to avoid Arrow type conflicts
+        for col in combined.columns:
+            combined[col] = combined[col].apply(
+                lambda v: json.dumps(v) if isinstance(v, (dict, list)) else str(v)
+            )
+        return Dataset.from_pandas(combined, preserve_index=False)
 
     def _load_from_local(self, config: Dict) -> Dataset:
         """Load dataset from local JSONL/JSON files."""
@@ -106,12 +167,25 @@ class ToolUseDataLoader:
         if path.is_file():
             with open(path) as f:
                 for line in f:
-                    data.append(json.loads(line))
-        else:
-            for file_path in path.glob("*.jsonl"):
+                    line = line.strip()
+                    if line:
+                        data.append(json.loads(line))
+        elif path.is_dir():
+            jsonl_files = list(path.glob("*.jsonl")) + list(path.glob("*.json"))
+            for file_path in jsonl_files:
                 with open(file_path) as f:
                     for line in f:
-                        data.append(json.loads(line))
+                        line = line.strip()
+                        if line:
+                            data.append(json.loads(line))
+        else:
+            raise FileNotFoundError(f"Local dataset path not found: {path}")
+
+        if not data:
+            raise ValueError(
+                f"No data found in {path}. "
+                "Run 'python scripts/generate_synthetic.py' to create synthetic data first."
+            )
 
         # Limit samples (random for consistency with hub loader)
         if samples and len(data) > samples:
@@ -162,16 +236,133 @@ class ToolUseDataLoader:
         return dataset.select(indices_to_keep)
 
     def _is_complete(self, example: Dict) -> bool:
-        """Check if example is complete."""
-        # Check required fields based on source
-        required = ["messages"] if isinstance(example.get("messages"), list) else ["text"]
-        return all(field in example and example[field] for field in required)
+        """Check if example has at least one meaningful content field."""
+        content_fields = ["text", "messages", "conversations", "id", "instruction",
+                          "question", "domain", "api_call", "function"]
+        return any(
+            field in example and example[field]
+            for field in content_fields
+        )
 
     def _normalize(self, example: Dict) -> Dict:
         """Normalize whitespace in text."""
         if "text" in example and isinstance(example["text"], str):
             example["text"] = " ".join(example["text"].split())
         return example
+
+    def _normalize_to_text(self, dataset: Dataset) -> Dataset:
+        """Convert any dataset schema into a unified 'text' column.
+
+        Handles:
+          - Already has 'text' column → keep as-is
+          - ToolBench 'conversations' (list of {from, value}) → render chat
+          - APIBench 'api_call' + 'domain' → render tool call
+          - BFCL 'question' + 'function' → render function call
+          - Messages [{role, content}] → render chat
+          - Fallback: JSON-dump entire row
+        """
+        cols = set(dataset.column_names)
+
+        def _row_to_text(example: Dict) -> Dict:
+            # 1. Already has text
+            if example.get("text"):
+                return example
+
+            # 2. ToolBench conversations: dict with 'from'/'value' or list of turns
+            if example.get("conversations"):
+                convs = example["conversations"]
+                if isinstance(convs, dict) and "from" in convs and "value" in convs:
+                    parts = []
+                    for role, val in zip(convs["from"], convs["value"]):
+                        parts.append(f"{role}: {val}")
+                    example["text"] = "\n".join(parts)
+                    return example
+                if isinstance(convs, list):
+                    parts = []
+                    for turn in convs:
+                        r = turn.get("from", turn.get("role", ""))
+                        v = turn.get("value", turn.get("content", ""))
+                        parts.append(f"{r}: {v}")
+                    example["text"] = "\n".join(parts)
+                    return example
+
+            # 3. ToolBench benchmark: query + api_list + relevant_apis
+            if example.get("query") and example.get("api_list"):
+                parts = [f"query: {example['query']}"]
+                api_list = example["api_list"]
+                if isinstance(api_list, str):
+                    parts.append(f"api_list: {api_list}")
+                else:
+                    parts.append(f"api_list: {json.dumps(api_list, default=str)}")
+                if example.get("relevant_apis"):
+                    ra = example["relevant_apis"]
+                    if isinstance(ra, str):
+                        parts.append(f"relevant_apis: {ra}")
+                    else:
+                        parts.append(f"relevant_apis: {json.dumps(ra, default=str)}")
+                example["text"] = "\n".join(parts)
+                return example
+
+            # 4. APIBench: domain + api_call + optional api_data
+            if example.get("api_call"):
+                parts = []
+                if example.get("domain"):
+                    parts.append(f"domain: {example['domain']}")
+                parts.append(f"api_call: {example['api_call']}")
+                if example.get("api_data"):
+                    api_data = example["api_data"]
+                    if isinstance(api_data, str):
+                        parts.append(f"api_data: {api_data}")
+                    else:
+                        parts.append(f"api_data: {json.dumps(api_data)}")
+                example["text"] = "\n".join(parts)
+                return example
+
+            # 5. BFCL: question + function list
+            if example.get("question"):
+                parts = [f"question: {json.dumps(example['question'], default=str)}"]
+                if example.get("function"):
+                    fn = example["function"]
+                    if isinstance(fn, str):
+                        parts.append(f"function: {fn}")
+                    else:
+                        parts.append(f"function: {json.dumps(fn, default=str)}")
+                example["text"] = "\n".join(parts)
+                return example
+
+            # 6. messages list [{role, content}]
+            if isinstance(example.get("messages"), list):
+                parts = []
+                for msg in example["messages"]:
+                    r = msg.get("role", "")
+                    c = msg.get("content", "")
+                    parts.append(f"{r}: {c}")
+                example["text"] = "\n".join(parts)
+                return example
+
+            # 7. instruction field
+            if example.get("instruction"):
+                example["text"] = example["instruction"]
+                return example
+
+            # 8. Fallback: dump all non-null fields
+            example["text"] = json.dumps(
+                {k: v for k, v in example.items()
+                 if k != "source" and v is not None},
+                default=str,
+            )
+            return example
+
+        logger.info("Normalizing all rows to unified 'text' column...")
+        dataset = dataset.map(_row_to_text, desc="Normalizing to text")
+
+        # Keep only text + source for a clean tokenization input
+        keep_cols = {"text", "source"}
+        drop_cols = [c for c in dataset.column_names if c not in keep_cols]
+        if drop_cols:
+            dataset = dataset.remove_columns(drop_cols)
+
+        return dataset
 
     def split_dataset(
         self, dataset: Dataset
@@ -184,19 +375,31 @@ class ToolUseDataLoader:
         # Shuffle
         dataset = dataset.shuffle(seed=self.seed)
 
+        total = len(dataset)
+        # Need at least 1 sample per split — fallback for tiny datasets
+        if total < 3:
+            logger.warning(f"Dataset too small ({total}) for 3-way split. Using all as train.")
+            empty = Dataset.from_dict({c: [] for c in dataset.column_names})
+            return dataset, empty, empty
+
         # Split
         split_data = dataset.train_test_split(
-            test_size=1 - train_ratio,
+            test_size=max(1 - train_ratio, 1 / total),
             seed=self.seed
         )
 
         train_data = split_data["train"]
         remaining = split_data["test"]
 
+        if len(remaining) < 2:
+            logger.warning("Not enough data for val/test split. Using remaining as val only.")
+            empty = Dataset.from_dict({c: [] for c in dataset.column_names})
+            return train_data, remaining, empty
+
         # Remaining split
         val_test_ratio = val_ratio / (1 - train_ratio)
         split_data = remaining.train_test_split(
-            test_size=1 - val_test_ratio,
+            test_size=max(1 - val_test_ratio, 1 / len(remaining)),
             seed=self.seed
         )
 
@@ -271,6 +474,9 @@ class ToolUseDataLoader:
         dataset = self.load_all_datasets()
         logger.info(f"Total: {len(dataset)} examples")
 
+        # Normalize every row to a unified 'text' column
+        dataset = self._normalize_to_text(dataset)
+
         # Preprocess
         dataset = self.preprocess(dataset)
 
@@ -293,19 +499,42 @@ class ToolUseDataLoader:
         })
 
     def _balance_sources(self, dataset: Dataset) -> Dataset:
-        """Balance dataset across sources."""
+        """Balance dataset across sources using median-target resampling.
+
+        Uses the median source count as target instead of the minimum,
+        which avoids collapsing the entire dataset when one source is tiny.
+        Small sources are oversampled (with replacement); large sources are
+        undersampled (without replacement).
+        """
         from collections import Counter
 
         source_counts = Counter(dataset["source"])
-        min_count = min(source_counts.values())
+        logger.info(f"Source distribution before balancing: {dict(source_counts)}")
+
+        counts = sorted(source_counts.values())
+        n = len(counts)
+        if n == 0:
+            return dataset
+
+        # Median as target — keeps more data than min
+        median = counts[n // 2] if n % 2 else (counts[n // 2 - 1] + counts[n // 2]) // 2
+        # Floor: at least 500 (or the largest source if all are smaller)
+        target_count = max(median, min(500, max(counts)))
 
         balanced = []
         for source_name in source_counts:
-            subset = dataset.filter(lambda x: x["source"] == source_name)
-            indices = np.random.choice(len(subset), min_count, replace=False)
+            subset = dataset.filter(lambda x, s=source_name: x["source"] == s)
+            src_len = len(subset)
+            if src_len >= target_count:
+                indices = np.random.choice(src_len, target_count, replace=False)
+            else:
+                # Oversample small sources with replacement
+                indices = np.random.choice(src_len, target_count, replace=True)
             balanced.append(subset.select(indices))
 
-        return concatenate_datasets(balanced)
+        result = concatenate_datasets(balanced)
+        logger.info(f"Balanced to ~{target_count} per source, total: {len(result)}")
+        return result
 
     # ------------------------------------------------------------------
     # GRPO prompt preparation

@@ -4,6 +4,9 @@
 
 set -e
 
+# Always run from the repo root
+cd "$(dirname "$0")/.." 
+
 echo "================================================"
 echo "Local Training Script"
 echo "================================================"
@@ -28,7 +31,7 @@ if [ ! -d "data/processed" ]; then
 fi
 
 # Run training
-python src/train.py \
+python3 src/train.py \
     --model_name_or_path "Qwen/Qwen3-8B" \
     --data_dir "./data/processed" \
     --output_dir "$OUTPUT_DIR" \

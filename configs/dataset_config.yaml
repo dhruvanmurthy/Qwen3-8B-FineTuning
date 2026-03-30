@@ -5,21 +5,25 @@ sources:
   api_bank:
     enabled: true
     name: "API-Bank"
-    url: "apibench/api-bank"
+    url: "gorilla-llm/APIBench"
     type: "huggingface"
     split: "train"
     samples: 5000
     config: null
     weight: 1.0
+    data_files:
+      - "torchhub_train.json"
+      - "huggingface_train.json"
+      - "tensorflow_train.json"
     description: "Real API orchestration with execution results"
 
   toolbench:
     enabled: true
     name: "ToolBench"
-    url: "ToolBench/toolbench"
+    url: "tuandunghcmut/toolbench-v1"
     type: "huggingface"
-    split: "train"
-    config: "G1_instructions"
+    split: "g1_instruction"
+    config: "benchmark"
     samples: 15000
     weight: 1.0
     description: "Tool selection and chaining from large catalogs"
@@ -27,12 +31,14 @@ sources:
   gorilla:
     enabled: true
     name: "Gorilla"
-    url: "gorilla-llm/gorilla-dataset"
+    url: "gorilla-llm/Berkeley-Function-Calling-Leaderboard"
     type: "huggingface"
-    split: "eval"
-    config: "api_domain"
+    split: "train"
+    config: null
     samples: 5000
     weight: 1.0
+    data_files:
+      - "BFCL_v3_live_simple.json"
     description: "Function calling with parameter correctness focus"
 
   synthetic:

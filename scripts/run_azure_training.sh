@@ -4,6 +4,9 @@
 
 set -e
 
+# Always run from the repo root
+cd "$(dirname "$0")/.." 
+
 echo "================================================"
 echo "Azure ML Training Submission"
 echo "================================================"

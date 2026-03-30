@@ -147,6 +147,37 @@ pip install torch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
 
 ## Dataset Issues
 
+### Problem: ArrowInvalid When Loading HF Datasets
+
+**Error**:
+```
+ArrowInvalid: JSON parse error: Column(/api_data/api_arguments) changed from object to string in row 1
+```
+
+**Cause**: Some HF JSON datasets have mixed types in the same column across rows (e.g., APIBench `api_arguments` switches between object and string). The default `datasets` JSON loader uses PyArrow, which requires consistent types.
+
+**Solution**: The `data_loader.py` `_load_from_hub` method automatically falls back to per-file pandas loading when the default loader fails. No manual action needed. If adding a new HF source with this issue, ensure `data_files` is set in `dataset_config.yaml` to load specific files.
+
+### Problem: HF Dataset Has Wrong Config/Split Name
+
+**Error**:
+```
+ValueError: Unknown split "train". Available splits: ['g1_instruction']
+```
+
+**Cause**: Many community HF datasets use non-standard config and split names.
+
+**Solution**: Use `get_dataset_config_names()` and inspect the dataset card:
+```python
+from datasets import get_dataset_config_names, load_dataset
+configs = get_dataset_config_names("tuandunghcmut/toolbench-v1")
+print(configs)  # ['default', 'benchmark']
+ds = load_dataset("tuandunghcmut/toolbench-v1", "benchmark")
+print(ds)  # Shows available splits
+```
+
+Then update `configs/dataset_config.yaml` with the correct `config` and `split` values.
+
 ### Problem: Dataset Files Too Large
 
 **Error**:
@@ -310,11 +341,14 @@ FileNotFoundError: model.safetensors not found
 
 **Solution**:
 ```bash
-# Clear cache and retry
+# Clear local project cache and retry
+rm -rf ./hf_cache/
+
+# Or clear global HF cache
 rm -rf ~/.cache/huggingface/
 
-# Or specify cache dir
-export HF_HOME=/path/to/cache
+# Project uses local cache dir
+export HF_HOME=./hf_cache
 ```
 
 ## Weights & Biases Issues
