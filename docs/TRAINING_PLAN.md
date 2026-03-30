@@ -9,8 +9,8 @@ Detailed guide to the **three-stage training pipeline**: Baseline evaluation →
 2. **Stage 1 — SFT**: QLoRA supervised fine-tuning (LoRA r=64, LR 2e-4, 3 epochs)
 3. **Stage 2 — GRPO**: Group Relative Policy Optimization (LoRA r=32, LR 3e-5, batch 128, group 16, 50 steps)
 
-**Compute**: Single A100 (1×80 GB) or A10 (1×24 GB) GPU  
-**Total Training Time**: ~22-28 hours on A100 (SFT + GRPO)  
+**Compute**: Single A100 (1×80 GB) or A10 (1×24 GB) GPU
+**Total Training Time**: ~22-28 hours on A100 (SFT + GRPO)
 **Budget**: ~$44-85 for full pipeline on Azure Spot
 
 ### Stage Summary
@@ -23,9 +23,9 @@ Detailed guide to the **three-stage training pipeline**: Baseline evaluation →
 
 ## Why QLoRA?
 
-✅ **Memory Efficient**: 11GB vs 80GB+ for full fine-tuning  
-✅ **Fast**: 40% faster than LoRA, maintains quality  
-✅ **Cost-Effective**: Fits on consumer GPUs (A10, RTX collection)  
+✅ **Memory Efficient**: 11GB vs 80GB+ for full fine-tuning
+✅ **Fast**: 40% faster than LoRA, maintains quality
+✅ **Cost-Effective**: Fits on consumer GPUs (A10, RTX collection)
 ✅ **Proven**: SOTA results on multiple benchmarks (Alpaca, MT-Bench)
 
 ### Comparison Table
@@ -361,7 +361,7 @@ early_stopping_threshold: 0         # Any improvement counts
 Training losses: 4.2 → 3.8 → 3.2 → NaN
 ```
 
-**Causes**: Learning rate too high, bad data  
+**Causes**: Learning rate too high, bad data
 **Fixes**:
 1. Reduce LR to 1e-4
 2. Check for NaN in dataset
@@ -373,7 +373,7 @@ Training losses: 4.2 → 3.8 → 3.2 → NaN
 Loss: 1.8 → 1.7 → 1.7 → 1.7 (plateaus at epoch 1)
 ```
 
-**Causes**: Too large learning rate, model capacity reached  
+**Causes**: Too large learning rate, model capacity reached
 **Fixes**:
 1. Increase warmup (warmup_ratio=0.2)
 2. Use cosine scheduler instead of linear
@@ -385,7 +385,7 @@ Loss: 1.8 → 1.7 → 1.7 → 1.7 (plateaus at epoch 1)
 Train: 1.2, Val: 2.0 (gap of 0.8)
 ```
 
-**Causes**: Too many parameters, too long training  
+**Causes**: Too many parameters, too long training
 **Fixes**:
 1. Increase dropout (lora_dropout=0.1)
 2. Increase weight decay (weight_decay=0.05)

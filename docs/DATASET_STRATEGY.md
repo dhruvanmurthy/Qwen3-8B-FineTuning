@@ -4,16 +4,16 @@ Complete guide to aggregating, preprocessing, and versioning datasets for tool-u
 
 ## Dataset Overview
 
-**Total Target**: 40,000 training samples  
-**Strategy**: Mix of real + synthetic data for diversity  
-**Format**: Unified ChatML (OpenAI function calling format)  
+**Total Target**: 40,000 training samples
+**Strategy**: Mix of real + synthetic data for diversity
+**Format**: Unified ChatML (OpenAI function calling format)
 **Time to Prepare**: ~2-3 hours (automated via `prepare_datasets.sh`)
 
 ## Source Datasets
 
 ### 1. API-Bank (5,000 samples)
 
-**Homepage**: https://huggingface.co/datasets/apibench/api-bank  
+**Homepage**: https://huggingface.co/datasets/apibench/api-bank
 **Characteristics**:
 - Real API calls with execution results
 - Multi-step sequences (1-3 API calls)
@@ -53,7 +53,7 @@ print(api_bank['train'][0])
 
 ### 2. ToolBench (15,000 samples)
 
-**Homepage**: https://huggingface.co/datasets/ToolBench/toolbench  
+**Homepage**: https://huggingface.co/datasets/ToolBench/toolbench
 **Characteristics**:
 - Tool selection from large catalogs (100+ tools)
 - Multi-step reasoning chains
@@ -92,7 +92,7 @@ print(len(toolbench), toolbench['train'][0].keys())
 
 ### 3. Gorilla (5,000 samples)
 
-**Homepage**: https://huggingface.co/datasets/gorilla-llm/gorilla-dataset  
+**Homepage**: https://huggingface.co/datasets/gorilla-llm/gorilla-dataset
 **Characteristics**:
 - Real API documentation
 - Focused on parameter correctness
@@ -128,7 +128,7 @@ print(gorilla['eval'][0])
 
 ### 4. Synthetic Data (15,000 samples)
 
-**Source**: Generated via GPT-4 with careful prompting  
+**Source**: Generated via GPT-4 with careful prompting
 **Rationale**: Fill domain gaps, edge cases, instruction-following diversity
 
 **Categories**:
@@ -153,10 +153,10 @@ def generate_synthetic_example(category: str) -> dict:
     - tool_calls: Expected function calls
     - results: Simulated execution results
     - response: Final assistant response
-    
+
     Ensure realistic parameters, diverse tool combinations.
     """
-    
+
     response = client.messages.create(
         model="claude-3-opus-20250219",
         max_tokens=1024,
@@ -207,9 +207,9 @@ def convert_to_chatml(example: dict, source: str) -> dict:
         return {
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": example["instruction"], 
+                {"role": "user", "content": example["instruction"],
                  "tools": example["tools"]},
-                {"role": "assistant", "content": "", 
+                {"role": "assistant", "content": "",
                  "tool_calls": example["api_calls"]},
                 {"role": "user", "content": str(example["results"])},
                 {"role": "assistant", "content": example["final_response"]}
@@ -299,7 +299,7 @@ sources:
     split: train
     samples: 5000
     weight: 1.0
-  
+
   toolbench:
     url: "ToolBench/toolbench"
     type: huggingface
@@ -307,7 +307,7 @@ sources:
     config: "G1_instructions"
     samples: 15000
     weight: 1.0
-  
+
   gorilla:
     url: "gorilla-llm/gorilla-dataset"
     type: huggingface
@@ -315,7 +315,7 @@ sources:
     config: "api_domain"
     samples: 5000
     weight: 1.0
-  
+
   synthetic:
     url: "./data/raw/synthetic/"
     type: local
@@ -394,7 +394,7 @@ duplicates = []
 for example in examples:
     text = json.dumps(example["messages"], sort_keys=True)
     hash_val = hashlib.md5(text.encode()).hexdigest()
-    
+
     if hash_val in seen:
         duplicates.append((example["id"], seen[hash_val]))
     else:
@@ -525,8 +525,8 @@ from difflib import SequenceMatcher
 duplicates = []
 for i, ex1 in enumerate(dataset):
     for j, ex2 in enumerate(dataset[i+1:], i+1):
-        similarity = SequenceMatcher(None, 
-            str(ex1["messages"]), 
+        similarity = SequenceMatcher(None,
+            str(ex1["messages"]),
             str(ex2["messages"])
         ).ratio()
         if similarity > 0.95:
@@ -547,7 +547,7 @@ for ex in dataset:
 # Downsample top 10% of tools
 top_tools = [t for t, c in tool_counts.most_common(int(0.1*len(tool_counts)))]
 dataset = dataset.filter(
-    lambda x: not any(c["tool"] in top_tools 
+    lambda x: not any(c["tool"] in top_tools
                       for c in x.get("tool_calls", []))
     or random.random() < 0.5  # 50% keep rare tools
 )
@@ -555,13 +555,13 @@ dataset = dataset.filter(
 
 ## Reproducibility Checklist
 
-✅ Dataset version pinned (v1.0)  
-✅ Random seed (42) for all splits  
-✅ DVC tracked (`.dvc` files in git)  
-✅ Preprocessing script versioned  
-✅ License attribution (DATASET_CARD.md)  
-✅ Sample examples in documentation  
-✅ Source URLs and hashes recorded  
+✅ Dataset version pinned (v1.0)
+✅ Random seed (42) for all splits
+✅ DVC tracked (`.dvc` files in git)
+✅ Preprocessing script versioned
+✅ License attribution (DATASET_CARD.md)
+✅ Sample examples in documentation
+✅ Source URLs and hashes recorded
 
 ## GRPO Prompt Preparation
 

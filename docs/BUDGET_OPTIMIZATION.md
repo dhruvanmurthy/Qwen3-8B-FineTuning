@@ -18,8 +18,8 @@ Strategies to keep the Qwen3-8B fine-tuning project under $150 budget.
 | **Buffer (unexpected)** | - | - | $20 |
 | **TOTAL** | | | **$64** |
 
-**Available Budget**: $150  
-**Utilization**: ~43%  
+**Available Budget**: $150
+**Utilization**: ~43%
 **Headroom**: $86 for iteration (extra GRPO steps, hyperparameter sweeps)
 
 ## Cost Optimization Strategies
@@ -43,7 +43,7 @@ az ml compute create \
   --max-price 2.00  # Set max price
 ```
 
-**Risk**: Preemption every 8-24 hours  
+**Risk**: Preemption every 8-24 hours
 **Mitigation**: Enable checkpointing (no extra cost)
 
 ### 2. Choose Cheaper GPU (A10 vs A100)
@@ -73,7 +73,7 @@ Quality vs. sample size:
 | 40k | 20h | 1.1 | 0% |
 | 60k | 30h | 1.05 | +50% |
 
-**Analysis**: Diminishing returns after 30k samples  
+**Analysis**: Diminishing returns after 30k samples
 **Recommendation**: Start with 20k, validate results, expand if needed
 
 ```bash
@@ -149,7 +149,7 @@ az storage blob upload-batch \
 # 3. Reuse in training runs (no extra cost)
 # Point training directly to Azure Blob
 
-# Savings: 
+# Savings:
 # - Without optimization: download datasets for each job = $5-10/run
 # - With optimization: $3 one-time, reuse = 90% savings
 ```
@@ -165,13 +165,13 @@ Use spot instance when available (don't stop between runs):
 for lr in 1e-4 2e-4; do
   for warmup in 0.05 0.1; do
     echo "Training LR=$lr WARMUP=$warmup"
-    
+
     python src/train.py \
       --learning-rate $lr \
       --warmup-ratio $warmup \
       --output-dir outputs/run_lr${lr}_warmup${warmup} \
       --save-strategy no  # Don't save intermediate checkpoints
-    
+
     # Copy best checkpoint
     cp outputs/run_*/checkpoint*/adapter_config.json \
        outputs/best_lr${lr}_warmup${warmup}/
@@ -314,16 +314,16 @@ TOTAL: $29.20
 
 ### Hidden Costs to Avoid
 
-❌ **Don't**: Leave GPU idle  
+❌ **Don't**: Leave GPU idle
 ✅ **Do**: Auto-scale to 0 after job finishes
 
-❌ **Don't**: Store model checkpoints in expensive storage  
+❌ **Don't**: Store model checkpoints in expensive storage
 ✅ **Do**: Save only best checkpoints, delete intermediate ones
 
-❌ **Don't**: Download dataset every training run  
+❌ **Don't**: Download dataset every training run
 ✅ **Do**: Upload once to Azure Blob, reuse
 
-❌ **Don't**: Use on-demand instances  
+❌ **Don't**: Use on-demand instances
 ✅ **Do**: Use Spot instances (60% cheaper)
 
 ## Spending Tracking Dashboard

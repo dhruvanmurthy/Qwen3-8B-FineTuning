@@ -136,10 +136,10 @@ test: add unit tests for tokenization
    # Format
    black src/
    isort src/
-   
+
    # Lint
    flake8 src/
-   
+
    # Test (if applicable)
    pytest tests/
    ```
@@ -181,13 +181,13 @@ pytest tests/ -v
 ```python
 def extract_tool_name(text: str) -> str:
     """Extract tool name from generated text.
-    
+
     Args:
         text: Generated text containing tool calls
-    
+
     Returns:
         Tool name extracted from text, or None if not found
-    
+
     Example:
         >>> extract_tool_name('Use get_weather(city="Paris")')
         'get_weather'
@@ -199,17 +199,17 @@ Use Google-style docstrings:
 ```python
 def train(model_args, data_args, training_args):
     """Main training function.
-    
+
     Loads model, prepares data, and runs training loop.
-    
+
     Args:
         model_args: Model configuration
         data_args: Data configuration
         training_args: Training hyperparameters
-    
+
     Returns:
         TrainingResult object with metrics
-    
+
     Raises:
         ValueError: If required arguments missing
         RuntimeError: If GPU/CUDA not available
@@ -276,7 +276,7 @@ Requirements:
 - Active engagement
 - Understanding of project goals
 
-Contact project lead: dhruvan.murthy@example.com
+Contact project lead: @dhruvanmurthy
 
 ## Code of Conduct
 
@@ -289,7 +289,7 @@ Contact project lead: dhruvan.murthy@example.com
 
 - **Technical**: Open GitHub discussion
 - **Contribution**: Reply to issue
-- **Maintainer**: Email dhruvan.murthy@example.com
+- **Maintainer**: Email @dhruvanmurthy
 
 ---
 

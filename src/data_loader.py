@@ -23,34 +23,34 @@ class ToolUseDataLoader:
         """Initialize data loader."""
         with open(config_path) as f:
             self.config = yaml.safe_load(f)
-        
+
         self.cache_dir = self.config.get("cache_dir", "./hf_cache")
         self.seed = self.config.get("seed", 42)
 
     def load_all_datasets(self) -> Dataset:
         """Load all configured datasets and concatenate."""
         datasets = []
-        
+
         for source_name, source_config in self.config["sources"].items():
             if not source_config.get("enabled", True):
                 logger.info(f"Skipping {source_name}")
                 continue
-            
+
             logger.info(f"Loading {source_name}...")
             dataset = self.load_single_dataset(source_name, source_config)
-            
+
             # Add source metadata
             dataset = dataset.map(
                 lambda x: {**x, "source": source_name},
                 desc=f"Adding source metadata for {source_name}"
             )
-            
+
             datasets.append(dataset)
-        
+
         # Concatenate
         logger.info("Concatenating datasets...")
         combined = concatenate_datasets(datasets)
-        
+
         return combined
 
     def load_single_dataset(self, name: str, config: Dict) -> Dataset:
@@ -68,9 +68,9 @@ class ToolUseDataLoader:
         split = config.get("split", "train")
         dataset_config = config.get("config", None)
         samples = config.get("samples", None)
-        
+
         logger.info(f"Loading {url} ({split})...")
-        
+
         if dataset_config:
             dataset = load_dataset(
                 url,
@@ -86,12 +86,12 @@ class ToolUseDataLoader:
                 cache_dir=self.cache_dir,
                 trust_remote_code=True
             )
-        
+
         # Limit samples
         if samples and len(dataset) > samples:
             indices = np.random.choice(len(dataset), samples, replace=False)
             dataset = dataset.select(indices)
-        
+
         logger.info(f"Loaded {len(dataset)} examples from {url}")
         return dataset
 
@@ -99,9 +99,9 @@ class ToolUseDataLoader:
         """Load dataset from local JSONL/JSON files."""
         path = Path(config["path"])
         samples = config.get("samples", None)
-        
+
         logger.info(f"Loading from {path}...")
-        
+
         data = []
         if path.is_file():
             with open(path) as f:
@@ -112,12 +112,12 @@ class ToolUseDataLoader:
                 with open(file_path) as f:
                     for line in f:
                         data.append(json.loads(line))
-        
+
         # Limit samples (random for consistency with hub loader)
         if samples and len(data) > samples:
             indices = np.random.choice(len(data), samples, replace=False)
             data = [data[i] for i in indices]
-        
+
         logger.info(f"Loaded {len(data)} examples from {path}")
         return Dataset.from_dict({
             "text": [json.dumps(d) for d in data]
@@ -125,39 +125,39 @@ class ToolUseDataLoader:
 
     def preprocess(self, dataset: Dataset) -> Dataset:
         """Apply preprocessing operations."""
-        
+
         # Deduplicate
         if self.config["preprocessing"].get("remove_duplicates", True):
             logger.info("Deduplicating...")
             dataset = self._deduplicate(dataset)
-        
+
         # Remove incomplete
         if self.config["preprocessing"].get("remove_incomplete", True):
             logger.info("Removing incomplete examples...")
             dataset = dataset.filter(self._is_complete)
-        
+
         # Normalize whitespace
         dataset = dataset.map(
             self._normalize, desc="Normalizing whitespace"
         )
-        
+
         return dataset
 
     def _deduplicate(self, dataset: Dataset) -> Dataset:
         """Remove duplicate examples."""
         import hashlib
-        
+
         seen_hashes = set()
         indices_to_keep = []
-        
+
         for idx, example in enumerate(dataset):
             text = json.dumps(example, sort_keys=True)
             hash_val = hashlib.md5(text.encode()).hexdigest()
-            
+
             if hash_val not in seen_hashes:
                 seen_hashes.add(hash_val)
                 indices_to_keep.append(idx)
-        
+
         logger.info(f"Removed {len(dataset) - len(indices_to_keep)} duplicates")
         return dataset.select(indices_to_keep)
 
@@ -180,31 +180,31 @@ class ToolUseDataLoader:
         split_config = self.config["splits"]
         train_ratio = split_config["train"]
         val_ratio = split_config["validation"]
-        
+
         # Shuffle
         dataset = dataset.shuffle(seed=self.seed)
-        
+
         # Split
         split_data = dataset.train_test_split(
             test_size=1 - train_ratio,
             seed=self.seed
         )
-        
+
         train_data = split_data["train"]
         remaining = split_data["test"]
-        
+
         # Remaining split
         val_test_ratio = val_ratio / (1 - train_ratio)
         split_data = remaining.train_test_split(
             test_size=1 - val_test_ratio,
             seed=self.seed
         )
-        
+
         val_data = split_data["train"]
         test_data = split_data["test"]
-        
+
         logger.info(f"Train: {len(train_data)}, Val: {len(val_data)}, Test: {len(test_data)}")
-        
+
         return train_data, val_data, test_data
 
     def tokenize_dataset(
@@ -214,7 +214,7 @@ class ToolUseDataLoader:
         max_length: int = 2048
     ) -> Dataset:
         """Tokenize dataset."""
-        
+
         def tokenize_function(examples):
             # Handle both "text" and "messages" formats
             texts = []
@@ -223,7 +223,7 @@ class ToolUseDataLoader:
                     texts.append(self._format_messages(item))
                 else:
                     texts.append(item)
-            
+
             tokenized = tokenizer(
                 texts,
                 truncation=True,
@@ -231,15 +231,15 @@ class ToolUseDataLoader:
                 padding="max_length",
                 return_tensors=None
             )
-            
+
             # Labels are a copy of input_ids (causal LM)
             tokenized["labels"] = [
                 [(t if t != tokenizer.pad_token_id else -100) for t in ids]
                 for ids in tokenized["input_ids"]
             ]
-            
+
             return tokenized
-        
+
         logger.info("Tokenizing dataset...")
         dataset = dataset.map(
             tokenize_function,
@@ -248,7 +248,7 @@ class ToolUseDataLoader:
             remove_columns=dataset.column_names,
             desc="Tokenizing"
         )
-        
+
         return dataset
 
     def _format_messages(self, messages: List[Dict]) -> str:
@@ -266,26 +266,26 @@ class ToolUseDataLoader:
         max_length: int = 2048
     ) -> DatasetDict:
         """Load, preprocess, and tokenize all datasets."""
-        
+
         # Load
         dataset = self.load_all_datasets()
         logger.info(f"Total: {len(dataset)} examples")
-        
+
         # Preprocess
         dataset = self.preprocess(dataset)
-        
+
         # Balance
         if self.config.get("balance_sources", True):
             dataset = self._balance_sources(dataset)
-        
+
         # Split
         train_data, val_data, test_data = self.split_dataset(dataset)
-        
+
         # Tokenize
         train_data = self.tokenize_dataset(train_data, tokenizer, max_length)
         val_data = self.tokenize_dataset(val_data, tokenizer, max_length)
         test_data = self.tokenize_dataset(test_data, tokenizer, max_length)
-        
+
         return DatasetDict({
             "train": train_data,
             "validation": val_data,
@@ -295,16 +295,16 @@ class ToolUseDataLoader:
     def _balance_sources(self, dataset: Dataset) -> Dataset:
         """Balance dataset across sources."""
         from collections import Counter
-        
+
         source_counts = Counter(dataset["source"])
         min_count = min(source_counts.values())
-        
+
         balanced = []
         for source_name in source_counts:
             subset = dataset.filter(lambda x: x["source"] == source_name)
             indices = np.random.choice(len(subset), min_count, replace=False)
             balanced.append(subset.select(indices))
-        
+
         return concatenate_datasets(balanced)
 
     # ------------------------------------------------------------------

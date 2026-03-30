@@ -435,18 +435,18 @@ See CONTRIBUTING.md for:
 ## Cost Breakdown
 
 ```
-┌─────────────────────────────────────────┐
-│ BUDGET SUMMARY                          │
-├─────────────────────────────────────────┤
-│ Azure A100 Training     20h × $1.50 = $30
-│ Storage (100GB)         1mo × $2    = $2
-│ Compute (data prep)     5h  × $0.50 = $2.50
-│ Evaluation & misc              = $5-10
-│                                       │
-│ TOTAL USED:                    ~$40   │
-│ BUDGET:                        $150   │
-│ REMAINING:                     $110   │
-└─────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│ BUDGET SUMMARY                               │
+├──────────────────────────────────────────────┤
+│ Azure A100 Training     20h × $1.50 = $30    │
+│ Storage (100GB)         1mo × $2    = $2     │
+│ Compute (data prep)     5h  × $0.50 = $2.50  │
+│ Evaluation & misc                   = $5-10  │
+│                                              │
+│ TOTAL USED :  ~$40                           │
+│ BUDGET     :  $150                           │
+│ REMAINING  :  $110                           │
+└──────────────────────────────────────────────┘
 ```
 
 Great for:
@@ -496,7 +496,7 @@ Good luck! 🚀
 
 ---
 
-**Project Lead**: Dhruvan Murthy  
-**GitHub**: https://github.com/dhruvanmurthy/Qwen3-8B-FineTuning  
-**HuggingFace**: https://huggingface.co/dhruvanmurthy  
+**Project Lead**: Dhruva N
+**GitHub**: https://github.com/dhruvanmurthy/Qwen3-8B-FineTuning
+**HuggingFace**: https://huggingface.co/dhruvanmurthy
 **Last Updated**: March 2026

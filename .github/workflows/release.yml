@@ -8,24 +8,24 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v3
-    
+
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: "3.11"
-    
+
     - name: Install dependencies
       run: |
         pip install transformers peft huggingface-hub
-    
+
     - name: Get model from outputs
       run: |
         # Assuming model is in outputs/model_final from training
         ls -la outputs/model_final/ || echo "No model found - this is expected in dev setup"
-    
+
     - name: Push to Hugging Face Hub
       if: startsWith(github.ref, 'refs/tags/v')
       env:
@@ -38,7 +38,7 @@ jobs:
         login(token=token)
         print('Model release step configured')
         "
-    
+
     - name: Create Release Notes
       run: |
         echo "## Release ${{ github.ref_name }}" > RELEASE_NOTES.md
@@ -46,7 +46,7 @@ jobs:
         echo "Released at: $(date)" >> RELEASE_NOTES.md
         echo "" >> RELEASE_NOTES.md
         echo "[View Model](https://huggingface.co/dhruvanmurthy/qwen3-8b-tool-use-lora)" >> RELEASE_NOTES.md
-    
+
     - name: Create GitHub Release
       uses: actions/create-release@v1
       env:

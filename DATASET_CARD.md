@@ -315,10 +315,10 @@ dataset = load_dataset("dhruvanmurthy/qwen3-8b-tool-use", split="train")
 
 ## Contact
 
-**Dataset Maintainer**: Dhruvan Murthy  
-**HuggingFace**: [dhruvanmurthy/qwen3-8b-tool-use](https://huggingface.co/datasets/dhruvanmurthy/qwen3-8b-tool-use)  
+**Dataset Maintainer**: Dhruva N
+**HuggingFace**: [dhruvanmurthy/qwen3-8b-tool-use](https://huggingface.co/datasets/dhruvanmurthy/qwen3-8b-tool-use)
 **Issues**: GitHub issue tracker
 
 ---
-**Last Updated**: March 2026  
+**Last Updated**: March 2026
 **Version**: 1.0

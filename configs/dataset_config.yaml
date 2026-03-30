@@ -12,7 +12,7 @@ sources:
     config: null
     weight: 1.0
     description: "Real API orchestration with execution results"
-  
+
   toolbench:
     enabled: true
     name: "ToolBench"
@@ -23,7 +23,7 @@ sources:
     samples: 15000
     weight: 1.0
     description: "Tool selection and chaining from large catalogs"
-  
+
   gorilla:
     enabled: true
     name: "Gorilla"
@@ -34,7 +34,7 @@ sources:
     samples: 5000
     weight: 1.0
     description: "Function calling with parameter correctness focus"
-  
+
   synthetic:
     enabled: true
     name: "Synthetic"
@@ -53,11 +53,11 @@ preprocessing:
   remove_incomplete: true
   remove_non_english: false
   language_threshold: 0.8
-  
+
   # Filtering
   filter_long_sequences: true
   filter_short_sequences: true
-  
+
   # Augmentation (optional)
   augmentation_enabled: false
   augmentation_rate: 0.1
@@ -67,7 +67,7 @@ splits:
   train: 0.8
   validation: 0.1
   test: 0.1
-  
+
 seed: 42
 stratified: false
 

@@ -111,7 +111,7 @@ Model:
   Bits: 4                    # 4-bit quantization
   LoRA Rank: 64              # LoRA matrices size
   LoRA Alpha: 16             # Scaling factor
-  
+
 Training:
   Epochs: 3
   Batch Size: 16 (per GPU)   # 32 global with gradient accumulation
@@ -119,12 +119,12 @@ Training:
   Warmup Ratio: 0.1
   Weight Decay: 0.01
   Max Grad Norm: 1.0
-  
+
 Optimization:
   Optimizer: AdamW
   Scheduler: linear          # Linear decay
   GradAcc Steps: 2
-  
+
 Format:
   Max Length: 2048           # Input + output tokens
   Target Columns: ["output"] # Training signal
@@ -186,7 +186,7 @@ Format:
 ```
 
 ## Model Card
-- **Uploaded By**: Dhruvan Murthy
+- **Uploaded By**: Dhruva N
 - **Model Type**: Causal Language Model (fine-tuned decoder)
 - **Library**: peft + transformers
 - **License**: Apache 2.0 (inherited from Qwen3-8B)
@@ -229,17 +229,17 @@ import json
 def invoke_tool_use_model(query, tools):
     base_model = "Qwen/Qwen3-8B"
     adapter_model = "dhruvanmurthy/qwen3-8b-tool-use-lora"
-    
+
     model = AutoModelForCausalLM.from_pretrained(base_model, device_map="auto")
     model = PeftModel.from_pretrained(model, adapter_model)
     tokenizer = AutoTokenizer.from_pretrained(base_model, padding_side="left")
-    
+
     # Format with tools
     prompt = f"Query: {query}\n\nAvailable Tools:\n{json.dumps(tools, indent=2)}\n\nResponse:"
-    
+
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
     outputs = model.generate(**inputs, max_new_tokens=512, temperature=0.7)
-    
+
     return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
 # Example usage
@@ -255,7 +255,7 @@ print(response)
 ## Contact & Support
 - **GitHub Issues**: [Report bugs](https://github.com/dhruvanmurthy/Qwen3-8B-FineTuning/issues)
 - **HuggingFace Hub**: [Model page](https://huggingface.co/dhruvanmurthy/qwen3-8b-tool-use-lora)
-- **Email**: dhruvan.murthy@example.com
+- **Email**: @dhruvanmurthy
 
 ---
 **Last Updated**: March 2026

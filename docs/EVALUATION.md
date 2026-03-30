@@ -18,8 +18,8 @@ A final **compare** step prints a side-by-side table of all three stages.
 
 ### 1. Tool Selection Accuracy
 
-**Metric**: Percentage of correct tool selections from available options  
-**Test Set**: API-Bank + ToolBench test splits  
+**Metric**: Percentage of correct tool selections from available options
+**Test Set**: API-Bank + ToolBench test splits
 **Target**: Baseline ~65%, SFT ~85%, GRPO >90%
 
 Each test example provides a query and a list of available tools. The evaluator
@@ -27,8 +27,8 @@ generates a response and checks whether the first tool call matches the expected
 
 ### 2. Argument Generation Accuracy
 
-**Metric**: F1 score for argument names and values  
-**Test Set**: Gorilla test split  
+**Metric**: F1 score for argument names and values
+**Test Set**: Gorilla test split
 **Target**: Baseline ~50%, SFT ~75%, GRPO >85%
 
 Compares predicted argument key-value pairs against expected ones using set-based
@@ -36,7 +36,7 @@ precision / recall / F1.
 
 ### 3. Schema Compliance
 
-**Metric**: Percentage of outputs that conform to the expected JSON tool-call schema  
+**Metric**: Percentage of outputs that conform to the expected JSON tool-call schema
 **Target**: Baseline ~40%, SFT ~80%, GRPO >90%
 
 Checks whether the model output can be parsed as a valid tool call (correct JSON
@@ -44,13 +44,13 @@ structure, required fields present, types correct).
 
 ### 4. Multi-Step Success Rate
 
-**Metric**: End-to-end success of 2-3 step tool chains  
-**Test Set**: API-Bank multi-step examples  
+**Metric**: End-to-end success of 2-3 step tool chains
+**Test Set**: API-Bank multi-step examples
 **Target**: Baseline ~40%, SFT ~70%, GRPO >80%
 
 ### 5. Latency
 
-**Metric**: Average generation time per example (seconds)  
+**Metric**: Average generation time per example (seconds)
 **Target**: < 2s per response on A100 / < 5s on consumer GPU
 
 ## Running Evaluations
@@ -204,23 +204,23 @@ Evaluate by tool category to identify weaknesses:
 ```python
 def evaluate_by_category(model, dataset):
     """Evaluate accuracy per API category."""
-    
+
     categories = {}
-    
+
     for example in dataset:
         category = example["category"]  # e.g., "weather", "payment"
-        
+
         if category not in categories:
             categories[category] = {"correct": 0, "total": 0}
-        
+
         # Evaluate
         predicted = model_predict(example)
         is_correct = predicted == example["expected"]
-        
+
         if is_correct:
             categories[category]["correct"] += 1
         categories[category]["total"] += 1
-    
+
     # Print breakdown
     for cat in sorted(categories.keys()):
         stats = categories[cat]
