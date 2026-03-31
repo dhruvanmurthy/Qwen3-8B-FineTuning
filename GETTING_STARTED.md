@@ -8,7 +8,7 @@ Step-by-step guide to run and verify the full **Baseline → SFT → GRPO** pipe
 
 | Requirement | Minimum | Recommended |
 |---|---|---|
-| **GPU** | 1 × 24 GB (RTX 3090 / A10) | 1 × 40-80 GB (A100) |
+| **GPU** | 1 × 24 GB (RTX 3090 / A10) | 1 × 16 GB (T4) |
 | **RAM** | 32 GB | 64 GB |
 | **Disk** | 50 GB free | 100 GB free |
 | **Python** | 3.10 | 3.11 |
@@ -80,7 +80,7 @@ python -c "from transformers import AutoTokenizer; t = AutoTokenizer.from_pretra
 **Expected output** (all must pass):
 ```
 CUDA: True
-GPU: NVIDIA A100-SXM4-40GB
+GPU: NVIDIA Tesla T4
 All imports OK
 Project modules OK
 Vocab size: 151936
@@ -438,7 +438,7 @@ See CONTRIBUTING.md for:
 ┌──────────────────────────────────────────────┐
 │ BUDGET SUMMARY                               │
 ├──────────────────────────────────────────────┤
-│ Azure A100 Training     20h × $1.50 = $30    │
+│ Azure T4 Training       20h × $1.50 = $30    │
 │ Storage (100GB)         1mo × $2    = $2     │
 │ Compute (data prep)     5h  × $0.50 = $2.50  │
 │ Evaluation & misc                   = $5-10  │

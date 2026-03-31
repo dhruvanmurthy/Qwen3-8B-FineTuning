@@ -12,7 +12,7 @@ This is a fine-tuned version of [Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B)
 - **LoRA Alpha (α)**: 16
 - **Target Modules**: q_proj, v_proj, k_proj, o_proj, gate_proj, up_proj, down_proj
 - **Training Data**: ~3,043 train samples (from ~20k raw across APIBench, ToolBench, Gorilla BFCL, Synthetic)
-- **Training Time**: ~20 hours on A100 GPU
+- **Training Time**: ~20 hours on 1× T4 16GB GPU (STANDARD_NC4AS_T4_V3)
 - **Training Date**: March 2026
 
 ## Model Performance
@@ -172,7 +172,7 @@ Format:
 ## Environmental Impact
 
 ### Training Emissions
-- **GPU Hours**: 20 hours on A100 (40.5 kWh)
+- **GPU Hours**: 20 hours on T4 (40.5 kWh)
 - **CO₂ Emissions**: ~9 kg CO₂eq (assuming US grid average)
 - **Committed to**: Offset via carbon credits 🌱
 

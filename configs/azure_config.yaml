@@ -12,7 +12,7 @@ type: command
 compute: azureml:gpu-cluster
 
 environment:
-  image: mcr.microsoft.com/azureml/openmpi4.1.0-cuda11.8-cudnn8-devel:latest
+  image: mcr.microsoft.com/azureml/openmpi4.1.0-cuda12.1-cudnn8-devel:latest
   conda_file: ./environment.yml
 
 code: .
@@ -51,13 +51,15 @@ outputs:
     path: azureml://datastores/workspacefilestore/paths/outputs/model_final
     mode: rw_mount
 
-timeout: 86400  # 24 hours
+limits:
+  timeout: 86400  # 24 hours
 resources:
   instance_count: 1
 
-# Scale-out config (multi-GPU, if available)
-distribution:
-  type: pytorch
+# distribution block intentionally omitted — single GPU (STANDARD_NC4AS_T4_V3).
+# Uncomment and set instance_count > 1 only for multi-node runs.
+# distribution:
+#   type: pytorch
 
 # Job-level env variables
 environment_variables:

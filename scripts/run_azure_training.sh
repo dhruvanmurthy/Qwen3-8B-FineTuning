@@ -7,6 +7,11 @@ set -e
 # Always run from the repo root
 cd "$(dirname "$0")/.." 
 
+# Load .env if present
+if [ -f .env ]; then
+    set -a; source .env; set +a
+fi
+
 echo "================================================"
 echo "Azure ML Training Submission"
 echo "================================================"

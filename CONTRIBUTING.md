@@ -46,8 +46,9 @@ Improve evaluation beyond tool selection accuracy:
 2. Document in `docs/EVALUATION.md`
 3. Add benchmark results
 
-### 3. Distributed Training Optimization
-Improve multi-GPU training:
+### 3. Distributed Training (Future)
+The current setup uses a single T4 16GB (STANDARD_NC4AS_T4_V3).
+If scaling to multi-GPU SKUs in the future:
 - [ ] DeepSpeed integration
 - [ ] FSDP support
 - [ ] Gradient compression
@@ -55,7 +56,7 @@ Improve multi-GPU training:
 
 **How to contribute**:
 1. Implement in `src/train.py`
-2. Test on 4+ GPUs
+2. Test on multi-GPU SKU
 3. Document speedup results
 
 ### 4. Cost Reduction Strategies

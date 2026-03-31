@@ -7,7 +7,7 @@ A cost-efficient, reproducible MLOps project for fine-tuning Qwen3-8B on multi-s
 - **Model**: Qwen3-8B (8B parameters, fast inference)
 - **Task**: Multi-step tool use & function calling
 - **Pipeline**: 3-stage — Baseline eval → SFT (QLoRA) → GRPO (RL with binary rewards)
-- **Budget**: ~$150 (Azure spot instances)
+- **Budget**: ~$150 (Azure Dedicated, STANDARD_NC4AS_T4_V3)
 - **Reproducibility**: Full tracking via W&B, versioned datasets, seed control
 
 ## Key Metrics
@@ -131,24 +131,24 @@ bash scripts/cleanup_azure.sh
 | **GRPO Training** | TRL (GRPOTrainer) | Stage 2: RL with binary rewards |
 | **Rewards** | Custom binary verifiers | Tool-use correctness signals |
 | **Coordinator** | Atropos pattern (in-process) | Environment ↔ trainer bridge |
-| **Compute** | Azure ML Compute Clusters | GPU training (A100/A10 spot) |
+| **Compute** | Azure ML Compute Clusters | GPU training (1× T4 16GB Dedicated) |
 | **Tracking** | Weights & Biases | Experiment logging |
 | **Versioning** | Git + DVC | Code & data version control |
 | **Models** | Hugging Face Hub | Model distribution |
 
-## Budget Breakdown (~$64 estimated)
+## Budget Breakdown (~$125 estimated)
 
 | Item | Cost | Notes |
 |------|------|-------|
-| Baseline evaluation | $1.50 | ~15 min A10 spot |
-| SFT training (3 epochs) | $27 | ~6h A100 spot |
-| SFT evaluation | $1.50 | ~15 min A10 spot |
-| GRPO training (50 steps) | $6 | ~1h A100 spot |
-| GRPO evaluation | $1.50 | ~15 min A10 spot |
-| Comparison report | $4.50 | ~45 min A10 spot |
+| Baseline evaluation | $3.67 | ~1h T4 dedicated |
+| SFT training (3 epochs) | $66 | ~18h T4 dedicated |
+| SFT evaluation | $3.67 | ~1h T4 dedicated |
+| GRPO training (50 steps) | $14.68 | ~4h T4 dedicated |
+| GRPO evaluation | $3.67 | ~1h T4 dedicated |
+| Comparison report | $11 | ~3h T4 dedicated |
 | Storage & misc | $2 | Blob storage |
-| **Buffer** | $20 | Preemption retries / tuning |
-| **Total** | **~$64** | Well within $150 budget |
+| **Buffer** | $20 | Retries / tuning |
+| **Total** | **~$125** | Within $150 budget |
 
 ## Security & Reproducibility
 

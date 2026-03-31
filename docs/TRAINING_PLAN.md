@@ -9,13 +9,13 @@ Detailed guide to the **three-stage training pipeline**: Baseline evaluation →
 2. **Stage 1 — SFT**: QLoRA supervised fine-tuning (LoRA r=64, LR 2e-4, 3 epochs)
 3. **Stage 2 — GRPO**: Group Relative Policy Optimization (LoRA r=32, LR 3e-5, batch 128, group 16, 50 steps)
 
-**Compute**: Single A100 (1×80 GB) or A10 (1×24 GB) GPU
-**Total Training Time**: ~22-28 hours on A100 (SFT + GRPO)
-**Budget**: ~$44-85 for full pipeline on Azure Spot
+**Compute**: Single T4 (1×16 GB) on STANDARD_NC4AS_T4_V3 (Dedicated)
+**Total Training Time**: ~22-28 hours on T4 (SFT + GRPO)
+**Budget**: ~$64-100 for full pipeline on Azure Dedicated
 
 ### Stage Summary
 
-| Stage | Method | LoRA Rank | LR | Steps | Cost (A100 Spot) |
+| Stage | Method | LoRA Rank | LR | Steps | Cost (T4 Dedicated) |
 |-------|--------|-----------|------|-------|------------------|
 | Baseline | Eval only | — | — | — | ~$1.50 |
 | SFT | QLoRA + Trainer | 64 | 2e-4 | ~3,750 | ~$27 |
@@ -51,7 +51,7 @@ bnb_4bit_quant_type: nf4             # 4-bit NormalFloat
 ```
 
 **Rationale**:
-- BF16: Stable training, CPU compat, native A100 support
+- BF16: Stable training, CPU compat (emulated on T4 via autocast)
 - 4-bit quantization: Minimal quality loss, maximum memory savings
 - Double quantization: Save additional 0.4GB
 
@@ -119,8 +119,8 @@ seed: 42
 ### Batch Size & Gradient Accumulation
 
 ```yaml
-effective_batch_size: 32  # 16 per-device * 2 GPUs = 32 (or 16*2 grad acc on 1 GPU)
-# For single A100:
+effective_batch_size: 32  # 16 per-device * 1 GPU * 2 grad_acc = 32 (single GPU)
+# For single T4 16GB:
 per_device_train_batch_size: 16
 gradient_accumulation_steps: 2
 # Result: 32 effective = good balance for 40k samples
@@ -383,9 +383,13 @@ RuntimeError: CUDA out of memory
 3. Enable gradient_checkpointing: true
 4. Reduce max_length: 2048 → 1024
 
-## Distributed Training (Multi-GPU)
+## Single-GPU Training Note
 
-For 2+ GPUs, enable distributed training:
+The current compute target is **STANDARD_NC4AS_T4_V3** (1× T4 16GB).
+QLoRA 4-bit uses ~12-15 GB VRAM, so a single GPU is more than sufficient.
+Distributed training (DDP, DeepSpeed, FSDP) is **not needed** for this setup.
+
+If you move to a multi-GPU SKU in the future:
 
 ```yaml
 ddp_world_size: 2                   # Number of GPUs
@@ -415,12 +419,12 @@ print(f"Max allocated: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
 print(f"Reserved: {torch.cuda.memory_reserved() / 1e9:.2f} GB")
 ```
 
-Expected for QLoRA (A100):
+Expected for QLoRA (T4):
 - Model weights (quantized): 2.5 GB
 - LoRA params: 0.3 GB
 - Optimizer states (8bit): 3-4 GB
 - Batch + gradients: 6-8 GB
-- **Total**: ~12-15 GB (out of 80GB)
+- **Total**: ~12-15 GB (out of 16GB)
 
 ## Checkpointing & Recovery
 
@@ -436,9 +440,10 @@ python src/train.py \
   --resume-from-checkpoint ./outputs/checkpoint-2500
 ```
 
-### Handling Preemption (Azure Spot)
+### Handling Failures (Azure Dedicated)
 
-Azure may kill your job when committed capacity is needed.
+With Dedicated VMs, preemption is not a concern. However, jobs can still fail
+due to hardware issues or timeouts.
 
 **Solution**: Enable automatic recovery:
 
@@ -497,7 +502,7 @@ num_train_epochs: 3
 learning_rate: 2e-4
 warmup_ratio: 0.1
 
-# Expected: ~20h on A100, cost ~$30 (spot), eval_loss ~1.3-1.5
+# Expected: ~20h on T4, cost ~$30 (spot), eval_loss ~1.3-1.5
 ```
 
 ## Next Steps

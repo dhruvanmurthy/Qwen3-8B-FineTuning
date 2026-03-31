@@ -28,33 +28,33 @@ az account show
 
 **Error**:
 ```
-Insufficient quota available for SKU Standard_ND_A100_v4 in region eastus
+Insufficient quota available for SKU STANDARD_NC4AS_T4_V3 in region southindia
 ```
 
 **Solutions**:
 1. Request quota increase via Azure Portal:
    - Home → Subscriptions → Usage + Quotas
-   - Filter by "ND_A100_v4"
+   - Filter by "NCASv3_T4"
    - Request Increase
 
 2. Use different region:
    ```bash
-   az ml compute create --size Standard_ND_A100_v4 \
+   az ml compute create --size STANDARD_NC4AS_T4_V3 \
      --location westus3  # Try different region
    ```
 
-3. Use cheaper GPU:
+3. Use a larger T4 SKU or different GPU family:
    ```bash
-   # A10 instead of A100 (3x cheaper, slightly slower)
-   az ml compute create --size Standard_NC24as_T4_v3 \
-     --vm-priority Spot
+   # 4× T4 variant (more vCPUs, same T4 GPU)
+   az ml compute create --size Standard_NC64as_T4_v3 \
+     --tier dedicated
    ```
 
-### Problem: Spot Instance Preemption
+### Problem: Job Failures on Dedicated Compute
 
 **Error**:
 ```
-Job cancelled due to spot instance reclamation
+Job failed due to compute node issues
 ```
 
 **Solutions**:
@@ -64,14 +64,14 @@ Job cancelled due to spot instance reclamation
    resume_from_checkpoint: auto
    ```
 
-2. Increase max price:
+2. If you switch to Spot VMs for cost savings, add preemption handling:
    ```bash
-   az ml compute create --max-price 3.00  # Instead of 2.00
+   az ml compute create --tier low_priority  # Cheaper, slight preemption risk
    ```
 
-3. Use low-priority instead:
+3. Use low-priority instead of dedicated for cost savings:
    ```bash
-   az ml compute create --vm-priority LowPriority  # More stable
+   az ml compute create --tier low_priority  # More affordable
    ```
 
 ## Local Training Issues

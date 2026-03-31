@@ -8,58 +8,63 @@ Strategies to keep the Qwen3-8B fine-tuning project under $150 budget.
 
 | Component | Quantity | Unit Cost | Total |
 |-----------|----------|-----------|-------|
-| **Baseline eval (A100 Spot)** | 1 hour | $1.50/hr | $1.50 |
-| **SFT Training (A100 Spot)** | 18 hours | $1.50/hr | $27 |
-| **SFT eval** | 1 hour | $1.50/hr | $1.50 |
-| **GRPO Training (A100 Spot)** | 4 hours | $1.50/hr | $6 |
-| **GRPO eval** | 1 hour | $1.50/hr | $1.50 |
-| **Full comparison eval** | 3 hours | $1.50/hr | $4.50 |
+| **Baseline eval (T4 Dedicated)** | 1 hour | ~$3.67/hr | $3.67 |
+| **SFT Training (T4 Dedicated)** | 18 hours | ~$3.67/hr | $66 |
+| **SFT eval** | 1 hour | ~$3.67/hr | $3.67 |
+| **GRPO Training (T4 Dedicated)** | 4 hours | ~$3.67/hr | $14.68 |
+| **GRPO eval** | 1 hour | ~$3.67/hr | $3.67 |
+| **Full comparison eval** | 3 hours | ~$3.67/hr | $11 |
 | **Storage (datasets)** | 100 GB | $0.02/GB/month | $2 |
 | **Buffer (unexpected)** | - | - | $20 |
-| **TOTAL** | | | **$64** |
+| **TOTAL** | | | **~$125** |
 
 **Available Budget**: $150
-**Utilization**: ~43%
-**Headroom**: $86 for iteration (extra GRPO steps, hyperparameter sweeps)
+**Utilization**: ~83%
+**Headroom**: ~$25 for iteration
 
 ## Cost Optimization Strategies
 
-### 1. Use Spot Instances (Save 60-70%)
+### 1. Use Dedicated Instances (Reliable, No Preemption)
 
-Spot VM pricing:
+The cluster uses `--tier dedicated` for reliable training with no preemption risk.
+If budget is tight, switch to `--tier low_priority` for ~60-70% savings at slight
+preemption risk.
 
-| GPU | On-Demand | Spot | Savings |
-|-----|-----------|------|---------|
-| A100 (40GB) | $4.75/hr | $1.50/hr | **68%** |
-| A100 (80GB) | $5.10/hr | $1.75/hr | **66%** |
-| A10 (24GB) | $2.50/hr | $0.75/hr | **70%** |
-| V100 (16GB) | $3.06/hr | $0.92/hr | **70%** |
+Dedicated vs Low-Priority pricing:
+
+| GPU | Dedicated | Low-Priority | Savings |
+|-----|-----------|--------------|---------|
+| A100 (80GB) NC24ADS | ~$3.67/hr | ~$1.47/hr | **60%** |
+| A10 (24GB) | ~$2.50/hr | ~$0.75/hr | **70%** |
+| V100 (16GB) | ~$3.06/hr | ~$0.92/hr | **70%** |
 
 **Implementation**:
 ```bash
+# Current (Dedicated, no preemption):
 az ml compute create \
   --name gpu-cluster \
-  --vm-priority Spot \
-  --max-price 2.00  # Set max price
+  --tier dedicated
+
+# Budget option (Low-Priority, slight preemption risk):
+az ml compute create \
+  --name gpu-cluster \
+  --tier low_priority
 ```
 
-**Risk**: Preemption every 8-24 hours
-**Mitigation**: Enable checkpointing (no extra cost)
+**Dedicated**: No preemption, predictable completion
+**Low-Priority**: Cheaper, may be interrupted — enable checkpointing
 
 ### 2. Choose Cheaper GPU (A10 vs A100)
 
 Training time comparison on Qwen3-8B:
 
-| GPU | VRAM | Training Time | Cost @ Spot |
-|-----|------|---------------|------------|
-| A100 (80GB) | 80GB | 18h | $27 |
-| A100 (40GB) | 40GB | 22h | $33 |
-| A10 (24GB) | 24GB | 36h | $27 |
-| V100 (16GB) | 16GB | 65h | $60 |
+| GPU | VRAM | Training Time | Cost @ Dedicated |
+|-----|------|---------------|------------------|
+| A100 (80GB) NC24ADS | 80GB | 18h | ~$66 |
+| A10 (24GB) | 24GB | 36h | ~$90 |
+| V100 (16GB) | 16GB | 65h | ~$199 |
 
-**Recommendation**: **A100 40GB Spot** = fastest + cheapest
-
-If not available, use **A10** (slower but still cost-effective).
+**Recommendation**: **T4 16GB Dedicated** (STANDARD_NC4AS_T4_V3) = budget-friendly + fits QLoRA comfortably
 
 ### 3. Reduce Training Samples (Diminishing Returns)
 
@@ -156,7 +161,7 @@ az storage blob upload-batch \
 
 ### 6. Batch Multiple Training Runs
 
-Use spot instance when available (don't stop between runs):
+Batch hyperparameter sweeps in a single session to avoid repeated startup cost:
 
 ```bash
 #!/bin/bash
@@ -191,7 +196,7 @@ done
 
 Apply here: https://azure.microsoft.com/en-us/free/
 
-### 8. Share Spot Compute with Team
+### 8. Share Compute with Team
 
 If multiple people fine-tuning:
 
@@ -200,7 +205,7 @@ If multiple people fine-tuning:
 az ml compute create \
   --name shared-gpu-cluster \
   --type amlcompute \
-  --vm-priority Spot \
+  --tier dedicated \
   --max-instances 4  # Support 4 concurrent jobs
   --idle-time-before-scale-down 600  # Scale down after 10 min
 ```

@@ -7,6 +7,11 @@ set -e
 # Always run from the repo root
 cd "$(dirname "$0")/.." 
 
+# Load .env if present
+if [ -f .env ]; then
+    set -a; source .env; set +a
+fi
+
 echo "================================================"
 echo "Azure ML Resource Setup"
 echo "================================================"
@@ -14,9 +19,9 @@ echo "================================================"
 # Configuration
 SUBSCRIPTION_ID="${AZURE_SUBSCRIPTION_ID}"
 RESOURCE_GROUP="${AZURE_RESOURCE_GROUP:-qwen3-finetuning}"
-LOCATION="${AZURE_LOCATION:-eastus}"
+LOCATION="${AZURE_LOCATION:-southindia}"
 WORKSPACE_NAME="${AZURE_WORKSPACE_NAME:-qwen3-workspace}"
-STORAGE_ACCOUNT="${AZURE_STORAGE_ACCOUNT:-qwen3storage$(date +%s)}"
+STORAGE_ACCOUNT="${AZURE_STORAGE_ACCOUNT:-qwen3storage}"
 
 # Validate inputs
 if [ -z "$SUBSCRIPTION_ID" ]; then
@@ -46,57 +51,76 @@ az group create \
 # Create storage account
 echo ""
 echo "Creating storage account..."
-az storage account create \
-    --name "$STORAGE_ACCOUNT" \
-    --resource-group "$RESOURCE_GROUP" \
-    --location "$LOCATION" \
-    --kind BlobStorage \
-    --access-tier Hot \
-    --sku Standard_LRS
+if ! az storage account show --name "$STORAGE_ACCOUNT" --resource-group "$RESOURCE_GROUP" &>/dev/null; then
+    az storage account create \
+        --name "$STORAGE_ACCOUNT" \
+        --resource-group "$RESOURCE_GROUP" \
+        --location "$LOCATION" \
+        --kind BlobStorage \
+        --access-tier Hot \
+        --sku Standard_LRS
+
+    sleep 10 # Wait for storage account to be fully provisioned
+
+else
+    echo "  Storage account '$STORAGE_ACCOUNT' already exists, skipping."
+fi
 
 # Create container
 echo ""
 echo "Creating storage container..."
 az storage container create \
     --name datasets \
-    --account-name "$STORAGE_ACCOUNT"
+    --account-name "$STORAGE_ACCOUNT" \
 
 # Create ML workspace
 echo ""
 echo "Creating ML workspace..."
-az ml workspace create \
-    --name "$WORKSPACE_NAME" \
-    --resource-group "$RESOURCE_GROUP" \
-    --location "$LOCATION" \
-    --display-name "Qwen3 Fine-tuning Workspace"
+if ! az ml workspace show --name "$WORKSPACE_NAME" --resource-group "$RESOURCE_GROUP" &>/dev/null; then
+    az ml workspace create \
+        --name "$WORKSPACE_NAME" \
+        --resource-group "$RESOURCE_GROUP" \
+        --location "$LOCATION" \
+        --display-name "Qwen3 Fine-tuning Workspace"
+else
+    echo "  Workspace '$WORKSPACE_NAME' already exists, skipping."
+fi
 
 # Create GPU compute cluster
 echo ""
 echo "Creating GPU compute cluster..."
-az ml compute create \
-    --type amlcompute \
-    --name gpu-cluster \
-    --resource-group "$RESOURCE_GROUP" \
-    --workspace-name "$WORKSPACE_NAME" \
-    --min-instances 0 \
-    --max-instances 4 \
-    --idle-time-before-scale-down 300 \
-    --size Standard_ND_A100_v4 \
-    --vm-priority Spot
+if ! az ml compute show --name gpu-cluster --resource-group "$RESOURCE_GROUP" --workspace-name "$WORKSPACE_NAME" &>/dev/null; then
+    az ml compute create \
+        --type amlcompute \
+        --name gpu-cluster \
+        --resource-group "$RESOURCE_GROUP" \
+        --workspace-name "$WORKSPACE_NAME" \
+        --min-instances 0 \
+        --max-instances 4 \
+        --idle-time-before-scale-down 300 \
+        --size STANDARD_NC4AS_T4_V3 \
+        --tier dedicated
+else
+    echo "  Compute 'gpu-cluster' already exists, skipping."
+fi
 
 # Create CPU compute cluster for evaluation
 echo ""
 echo "Creating CPU compute cluster..."
-az ml compute create \
-    --type amlcompute \
-    --name cpu-cluster \
-    --resource-group "$RESOURCE_GROUP" \
-    --workspace-name "$WORKSPACE_NAME" \
-    --min-instances 0 \
-    --max-instances 2 \
-    --idle-time-before-scale-down 300 \
-    --size Standard_D4s_v3 \
-    --vm-priority LowPriority
+if ! az ml compute show --name cpu-cluster --resource-group "$RESOURCE_GROUP" --workspace-name "$WORKSPACE_NAME" &>/dev/null; then
+    az ml compute create \
+        --type amlcompute \
+        --name cpu-cluster \
+        --resource-group "$RESOURCE_GROUP" \
+        --workspace-name "$WORKSPACE_NAME" \
+        --min-instances 0 \
+        --max-instances 2 \
+        --idle-time-before-scale-down 300 \
+        --size Standard_D4s_v3 \
+        --tier dedicated
+else
+    echo "  Compute 'cpu-cluster' already exists, skipping."
+fi
 
 echo ""
 echo "================================================"

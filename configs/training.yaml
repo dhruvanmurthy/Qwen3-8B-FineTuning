@@ -119,17 +119,17 @@ data_seed: 42
 # FP16 / BF16
 # ============================================================================
 
-bf16: true  # Use bfloat16 (native on A100, stable)
+bf16: true  # Use bfloat16 (emulated on T4; switch to fp16 if unstable)
 fp16: false
 
 # ============================================================================
-# DISTRIBUTED TRAINING (Multi-GPU)
+# SINGLE-GPU NOTE
 # ============================================================================
-
-# Uncomment for multi-GPU setup:
-# ddp_find_unused_parameters: false
-# ddp_backend: "nccl"
-# world_size: 1
+# Current setup: STANDARD_NC4AS_T4_V3 (1× T4 16GB).
+# QLoRA 4-bit uses ~12-15 GB VRAM — no distributed training needed.
+# If you later switch to a multi-GPU SKU, uncomment DDP settings:
+#   ddp_find_unused_parameters: false
+#   ddp_backend: "nccl"
 
 # ============================================================================
 # MISCELLANEOUS

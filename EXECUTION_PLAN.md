@@ -99,7 +99,7 @@ cat outputs/eval_baseline/baseline_results.json | python -m json.tool
 # Expect tool_selection ~65%, argument_accuracy ~50%, multi_step ~40%
 ```
 
-## Phase 5: SFT Training (6-8 hours on A100)
+## Phase 5: SFT Training (6-8 hours on T4)
 
 Supervised fine-tuning with QLoRA (rank 64, LR 2e-4, 3 epochs).
 
@@ -133,7 +133,7 @@ python src/evaluate.py \
 
 Expected: tool_selection ~85%, argument_accuracy ~75%, multi_step ~70%.
 
-## Phase 6: GRPO Training (1-2 hours on A100)
+## Phase 6: GRPO Training (1-2 hours on T4)
 
 Reinforcement learning with binary verifiable rewards (rank 32, LR 3e-5, 50 steps).
 

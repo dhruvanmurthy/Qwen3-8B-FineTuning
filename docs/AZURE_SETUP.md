@@ -17,13 +17,13 @@ Complete guide to running the **Baseline → SFT → GRPO** pipeline on Azure ML
 # PowerShell
 $env:AZURE_SUBSCRIPTION_ID = "your-subscription-id"
 $env:AZURE_RESOURCE_GROUP   = "qwen3-finetuning"
-$env:AZURE_LOCATION         = "eastus"
+$env:AZURE_LOCATION         = "southindia"
 $env:AZURE_WORKSPACE_NAME   = "qwen3-workspace"
 
 # Bash / WSL
 export AZURE_SUBSCRIPTION_ID="your-subscription-id"
 export AZURE_RESOURCE_GROUP="qwen3-finetuning"
-export AZURE_LOCATION="eastus"
+export AZURE_LOCATION="southindia"
 export AZURE_WORKSPACE_NAME="qwen3-workspace"
 ```
 
@@ -73,7 +73,7 @@ az ml compute create \
   --min-instances 0 \
   --max-instances 4 \
   --idle-time-before-scale-down 300 \
-  --size Standard_ND_A100_v4 \
+  --size STANDARD_NC4AS_T4_V3 \
   --vm-priority Spot
 
 # 2e. (Optional) Key Vault for secrets
@@ -301,9 +301,10 @@ az ml compute delete --name gpu-cluster -g $AZURE_RESOURCE_GROUP -w $AZURE_WORKS
 | **A100 80 GB** | 80 GB | $1.75 | 18 hr | Yes (batch 4) |
 | **A100 40 GB** | 40 GB | $1.50 | 22 hr | Yes (batch 2) |
 | **A10 24 GB** | 24 GB | $0.75 | 36 hr | Yes (batch 1, accum 128) |
+| **T4 16 GB** (← current) | 16 GB | $0.53 | ~40 hr | Yes (batch 1, accum 128) |
 | V100 16 GB | 16 GB | $0.92 | 65 hr | Tight — reduce group size to 8 |
 
-**Recommendation**: A100 40 GB Spot for best cost/performance.
+**Current SKU**: STANDARD_NC4AS_T4_V3 (T4 16 GB Dedicated).
 
 ---
 
@@ -311,7 +312,7 @@ az ml compute delete --name gpu-cluster -g $AZURE_RESOURCE_GROUP -w $AZURE_WORKS
 
 | Problem | Solution |
 |---|---|
-| Quota insufficient for A100 | Request increase via Azure Portal → Subscriptions → Usage + Quotas, or use A10 |
+| Quota insufficient for T4 | Request increase via Azure Portal → Subscriptions → Usage + Quotas (NCASv3_T4 family) |
 | Spot instance preempted | Checkpointing is built-in; resubmit the same job — it resumes automatically |
 | Authentication error | `az login --use-device-code` |
 | Job stuck in "Preparing" | Check compute cluster status: `az ml compute show --name gpu-cluster ...` |
