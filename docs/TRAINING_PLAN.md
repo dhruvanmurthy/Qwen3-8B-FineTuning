@@ -9,9 +9,9 @@ Detailed guide to the **three-stage training pipeline**: Baseline evaluation →
 2. **Stage 1 — SFT**: QLoRA supervised fine-tuning (LoRA r=64, LR 2e-4, 3 epochs)
 3. **Stage 2 — GRPO**: Group Relative Policy Optimization (LoRA r=32, LR 3e-5, batch 128, group 16, 50 steps)
 
-**Compute**: Single T4 (1×16 GB) on STANDARD_NC4AS_T4_V3 (Dedicated)
-**Total Training Time**: ~22-28 hours on T4 (SFT + GRPO)
-**Budget**: ~$64-100 for full pipeline on Azure Dedicated
+**Compute**: Single or multi-GPU (DDP via torchrun)
+**Total Training Time**: ~22-28 hours on 1× T4 (SFT + GRPO), scales linearly with GPU count
+**Budget**: ~$64-100 for full pipeline
 
 ### Stage Summary
 
@@ -440,10 +440,9 @@ python src/train.py \
   --resume-from-checkpoint ./outputs/checkpoint-2500
 ```
 
-### Handling Failures (Azure Dedicated)
+### Handling Failures
 
-With Dedicated VMs, preemption is not a concern. However, jobs can still fail
-due to hardware issues or timeouts.
+Jobs can fail due to hardware issues or timeouts.
 
 **Solution**: Enable automatic recovery:
 
@@ -508,10 +507,9 @@ warmup_ratio: 0.1
 ## Next Steps
 
 1. Prepare datasets using [DATASET_STRATEGY.md](DATASET_STRATEGY.md)
-2. Set up Azure using [AZURE_SETUP.md](AZURE_SETUP.md)
-3. Run local test: see [GETTING_STARTED.md](../GETTING_STARTED.md)
-4. Run full pipeline: `bash scripts/run_pipeline.sh`
-5. Monitor in W&B: [Weights & Biases](https://wandb.ai/dhruvanmurthy/qwen3-8b-tool-use)
+2. Run local test: see [GETTING_STARTED.md](../GETTING_STARTED.md)
+3. Run full pipeline: `bash scripts/run_pipeline.sh`
+4. Monitor in W&B: [Weights & Biases](https://wandb.ai/dhruvanmurthy/qwen3-8b-tool-use)
 
 ---
 

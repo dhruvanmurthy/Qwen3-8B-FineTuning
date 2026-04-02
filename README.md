@@ -7,7 +7,7 @@ A cost-efficient, reproducible MLOps project for fine-tuning Qwen3-8B on multi-s
 - **Model**: Qwen3-8B (8B parameters, fast inference)
 - **Task**: Multi-step tool use & function calling
 - **Pipeline**: 3-stage — Baseline eval → SFT (QLoRA) → GRPO (RL with binary rewards)
-- **Budget**: ~$150 (Azure Dedicated, STANDARD_NC4AS_T4_V3)
+- **Budget**: Optimized for cost-efficient local/cloud GPU training
 - **Reproducibility**: Full tracking via W&B, versioned datasets, seed control
 
 ## Key Metrics
@@ -33,7 +33,6 @@ Qwen3-8B-FineTuning/
 ├── .env.example                       # Environment variables template
 │
 ├── docs/
-│   ├── AZURE_SETUP.md                # Step-by-step Azure guide
 │   ├── TRAINING_PLAN.md              # 3-stage training strategy
 │   ├── DATASET_STRATEGY.md           # Data pipeline & aggregation
 │   ├── EVALUATION.md                 # 3-stage evaluation methodology
@@ -43,7 +42,6 @@ Qwen3-8B-FineTuning/
 ├── configs/
 │   ├── training.yaml                 # Stage 1: SFT hyperparameters
 │   ├── grpo_config.yaml              # Stage 2: GRPO recipe
-│   ├── azure_config.yaml             # Azure ML Job config
 │   ├── qora_config.yaml              # QLoRA parameters
 │   └── dataset_config.yaml           # Dataset pipeline config
 │
@@ -58,12 +56,10 @@ Qwen3-8B-FineTuning/
 │
 ├── scripts/
 │   ├── run_pipeline.sh               # 3-stage orchestrator (main entry point)
-│   ├── setup_azure.sh                # Azure resource provisioning
 │   ├── prepare_datasets.sh           # Download & process datasets
-│   ├── run_local_training.sh         # Local SFT training
-│   ├── run_azure_training.sh         # Azure training submission
+│   ├── run_local_training.sh         # Local training (single + multi-GPU)
 │   ├── evaluate_model.sh             # Run evaluation
-│   └── cleanup_azure.sh              # Delete Azure resources
+│   └── generate_synthetic.py         # Synthetic data generation
 │
 ├── data/
 │   ├── raw/                          # Downloaded raw datasets
@@ -97,27 +93,23 @@ bash scripts/run_pipeline.sh grpo       # Train GRPO (requires SFT output)
 bash scripts/run_pipeline.sh compare    # Side-by-side comparison
 ```
 
-### Azure (see [docs/AZURE_SETUP.md](docs/AZURE_SETUP.md) for details)
+### Multi-GPU Training
 
 ```bash
-# 1. Provision resources
-bash scripts/setup_azure.sh
+# Auto-detect all GPUs:
+bash scripts/run_local_training.sh
 
-# 2. Submit training
-bash scripts/run_azure_training.sh
-
-# 3. Cleanup when done
-bash scripts/cleanup_azure.sh
+# Or explicitly:
+GPUS=4 bash scripts/run_pipeline.sh all
 ```
 
 ## Documentation
 
 - **[GETTING_STARTED.md](GETTING_STARTED.md)** — Full local setup and run guide
-- **[docs/AZURE_SETUP.md](docs/AZURE_SETUP.md)** — Azure ML environment and job submission
 - **[docs/TRAINING_PLAN.md](docs/TRAINING_PLAN.md)** — 3-stage training strategy and hyperparameters
 - **[docs/DATASET_STRATEGY.md](docs/DATASET_STRATEGY.md)** — Dataset sourcing, aggregation, GRPO prompt prep
 - **[docs/EVALUATION.md](docs/EVALUATION.md)** — 3-stage evaluation metrics and comparison
-- **[docs/BUDGET_OPTIMIZATION.md](docs/BUDGET_OPTIMIZATION.md)** — Cost reduction and spot instance strategies
+- **[docs/BUDGET_OPTIMIZATION.md](docs/BUDGET_OPTIMIZATION.md)** — Cost reduction strategies
 - **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** — Common errors and solutions (incl. GRPO)
 - **[MODEL_CARD.md](MODEL_CARD.md)** — Model capabilities, limitations, license
 - **[DATASET_CARD.md](DATASET_CARD.md)** — Dataset composition, sources, licenses
@@ -131,28 +123,22 @@ bash scripts/cleanup_azure.sh
 | **GRPO Training** | TRL (GRPOTrainer) | Stage 2: RL with binary rewards |
 | **Rewards** | Custom binary verifiers | Tool-use correctness signals |
 | **Coordinator** | Atropos pattern (in-process) | Environment ↔ trainer bridge |
-| **Compute** | Azure ML Compute Clusters | GPU training (1× T4 16GB Dedicated) |
+| **Compute** | Local / Cloud GPU (multi-GPU via torchrun) | Distributed training |
 | **Tracking** | Weights & Biases | Experiment logging |
 | **Versioning** | Git + DVC | Code & data version control |
 | **Models** | Hugging Face Hub | Model distribution |
 
-## Budget Breakdown (~$125 estimated)
+## Estimated Training Time
 
-| Item | Cost | Notes |
-|------|------|-------|
-| Baseline evaluation | $3.67 | ~1h T4 dedicated |
-| SFT training (3 epochs) | $66 | ~18h T4 dedicated |
-| SFT evaluation | $3.67 | ~1h T4 dedicated |
-| GRPO training (50 steps) | $14.68 | ~4h T4 dedicated |
-| GRPO evaluation | $3.67 | ~1h T4 dedicated |
-| Comparison report | $11 | ~3h T4 dedicated |
-| Storage & misc | $2 | Blob storage |
-| **Buffer** | $20 | Retries / tuning |
-| **Total** | **~$125** | Within $150 budget |
+| Stage | Method | Time (1× GPU) | Time (4× GPU) |
+|-------|--------|---------------|----------------|
+| Baseline | Eval only | ~30 min | ~30 min |
+| SFT | QLoRA + Trainer | ~18h | ~5h |
+| GRPO | QLoRA + GRPOTrainer | ~4h | ~1.5h |
 
 ## Security & Reproducibility
 
-- **Secrets**: `.env` (git-ignored), Azure Key Vault for production
+- **Secrets**: `.env` (git-ignored)
 - **Seeds**: Fixed global seed (42) for all stages
 - **Deps**: Pinned versions in `requirements.txt`
 - **Data**: Versioned datasets on HF Hub, DVC for local tracking
@@ -214,8 +200,8 @@ tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B")
 ## Troubleshooting
 
 See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for solutions to:
-- Azure authentication and quota issues
 - GPU memory overflow (SFT and GRPO)
+- Multi-GPU / DDP issues
 - GRPO rewards stuck at zero
 - TRL version compatibility
 - Training instability

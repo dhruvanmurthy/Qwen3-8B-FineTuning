@@ -114,11 +114,19 @@ def load_model_and_tokenizer(model_args: ModelArguments):
 
     logger.info(f"Loading model: {model_args.model_name_or_path}")
 
+    # In distributed mode (torchrun), pin each process to its local GPU.
+    # Otherwise fall back to "auto" for single-GPU / CPU offload.
+    local_rank = int(os.environ.get("LOCAL_RANK", -1))
+    if local_rank >= 0:
+        device_map = {"":  local_rank}
+    else:
+        device_map = "auto"
+
     # Load model
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         quantization_config=bnb_config,
-        device_map="auto",
+        device_map=device_map,
         trust_remote_code=True,
         torch_dtype=torch.bfloat16,
     )

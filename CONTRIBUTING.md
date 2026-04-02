@@ -46,10 +46,10 @@ Improve evaluation beyond tool selection accuracy:
 2. Document in `docs/EVALUATION.md`
 3. Add benchmark results
 
-### 3. Distributed Training (Future)
-The current setup uses a single T4 16GB (STANDARD_NC4AS_T4_V3).
-If scaling to multi-GPU SKUs in the future:
-- [ ] DeepSpeed integration
+### 3. Multi-Node Distributed Training (Future)
+Single-node multi-GPU (DDP via torchrun) is supported.
+For multi-node scaling:
+- [ ] DeepSpeed ZeRO Stage 2/3 integration
 - [ ] FSDP support
 - [ ] Gradient compression
 - [ ] Communication optimization

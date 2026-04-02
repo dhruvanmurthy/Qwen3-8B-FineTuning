@@ -91,10 +91,6 @@ logs/
 wandb/
 lightning_logs/
 
-# Azure
-.azureml/
-azure_output/
-*.json.bak
 
 # HuggingFace Cache
 huggingface_cache/

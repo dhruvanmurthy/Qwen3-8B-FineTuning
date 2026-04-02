@@ -11,6 +11,9 @@
 #   bash scripts/run_pipeline.sh sft       # only SFT stage
 #   bash scripts/run_pipeline.sh grpo      # only GRPO stage
 #   bash scripts/run_pipeline.sh compare   # only comparison
+#
+# Multi-GPU:
+#   GPUS=4 bash scripts/run_pipeline.sh    # use 4 GPUs
 
 set -e
 
@@ -22,6 +25,20 @@ BASE_MODEL="${BASE_MODEL:-Qwen/Qwen3-8B}"
 SFT_OUTPUT="${SFT_OUTPUT:-./outputs/sft}"
 GRPO_OUTPUT="${GRPO_OUTPUT:-./outputs/grpo}"
 
+# GPU detection — default to all visible GPUs
+if [ -z "$GPUS" ]; then
+    GPUS=$(python3 -c "import torch; print(torch.cuda.device_count())" 2>/dev/null || echo "1")
+fi
+
+# Helper: launch with torchrun when multi-GPU, plain python otherwise
+run_train() {
+    if [ "$GPUS" -gt 1 ]; then
+        torchrun --nproc_per_node="$GPUS" "$@"
+    else
+        python3 "$@"
+    fi
+}
+
 echo "============================================="
 echo " Qwen3-8B Tool-Use Fine-Tuning Pipeline"
 echo "============================================="
@@ -29,6 +46,7 @@ echo "  Base model : $BASE_MODEL"
 echo "  SFT output : $SFT_OUTPUT"
 echo "  GRPO output: $GRPO_OUTPUT"
 echo "  Stage      : $STAGE"
+echo "  GPUs       : $GPUS"
 echo "============================================="
 
 # --------------------------------------------------
@@ -49,7 +67,7 @@ fi
 if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
     echo ""
     echo ">>> Stage 1: SFT Training"
-    python3 src/train.py \
+    run_train src/train.py \
         --model_name_or_path "$BASE_MODEL" \
         --output_dir "$SFT_OUTPUT" \
         --num_train_epochs 3 \
@@ -66,6 +84,8 @@ if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
         --load_best_model_at_end \
         --bf16 \
         --gradient_checkpointing \
+        --ddp_find_unused_parameters false \
+        --ddp_backend nccl \
         --logging_steps 10 \
         --report_to wandb \
         --seed 42
@@ -85,7 +105,7 @@ fi
 if [[ "$STAGE" == "grpo" || "$STAGE" == "all" ]]; then
     echo ""
     echo ">>> Stage 2: GRPO Training (LoRA r=32, LR 3e-5, batch 128, group 16, 50 steps)"
-    python3 src/train_grpo.py \
+    run_train src/train_grpo.py \
         --sft-adapter-path "$SFT_OUTPUT" \
         --base-model-name "$BASE_MODEL" \
         --output-dir "$GRPO_OUTPUT" \

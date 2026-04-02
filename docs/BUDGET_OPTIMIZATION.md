@@ -142,21 +142,11 @@ Eval loss after 1 epoch?
 Compute cheap pre-processing once, reuse:
 
 ```bash
-# 1. Download & process datasets (one-time, ~$1)
+# 1. Download & process datasets (one-time)
 bash scripts/prepare_datasets.sh
 
-# 2. Upload to Azure Blob (one-time, ~$2)
-az storage blob upload-batch \
-  -d datasets \
-  --account-name $STORAGE_ACCOUNT \
-  -s data/processed/
-
-# 3. Reuse in training runs (no extra cost)
-# Point training directly to Azure Blob
-
-# Savings:
-# - Without optimization: download datasets for each job = $5-10/run
-# - With optimization: $3 one-time, reuse = 90% savings
+# 2. Reuse in training runs (no extra cost)
+# Point training directly to data/processed/
 ```
 
 ### 6. Batch Multiple Training Runs
@@ -188,46 +178,7 @@ done
 # - Savings: 3 × GPU startup overhead avoided (~$5)
 ```
 
-### 7. Use Azure Credits/Free Tier
-
-- **Azure Free Tier**: $200 credit for 12 months
-- **Student/Educational**: $100 credit
-- **Startup**: Up to $1000 in Azure credits
-
-Apply here: https://azure.microsoft.com/en-us/free/
-
-### 8. Share Compute with Team
-
-If multiple people fine-tuning:
-
-```bash
-# Create shared compute cluster
-az ml compute create \
-  --name shared-gpu-cluster \
-  --type amlcompute \
-  --tier dedicated \
-  --max-instances 4  # Support 4 concurrent jobs
-  --idle-time-before-scale-down 600  # Scale down after 10 min
-```
-
-**Benefit**: Amortize cost across multiple projects
-
-### 9. Monitor Spending in Real-Time
-
-Set up Azure cost alerts:
-
-```bash
-# View current spending (updates hourly)
-az consumption budget list --resource-group qwen3-finetuning
-
-# Set up alert
-az consumption budget create \
-  --name qwen3-warning \
-  --amount 75 \
-  --threshold-type Forecast \
-  --threshold 80  # Alert at 80% of budget
-  --notification-enabled true
-```
+### 7. Track Compute Usage
 
 Keep an eye on W&B compute metrics:
 
@@ -326,7 +277,7 @@ TOTAL: $29.20
 ✅ **Do**: Save only best checkpoints, delete intermediate ones
 
 ❌ **Don't**: Download dataset every training run
-✅ **Do**: Upload once to Azure Blob, reuse
+✔️ **Do**: Preprocess once, reuse from local/shared storage
 
 ❌ **Don't**: Use on-demand instances
 ✅ **Do**: Use Spot instances (60% cheaper)
@@ -376,11 +327,10 @@ Annual: ~$700 (need to pay after free tier expires)
 
 ## Next Steps
 
-1. Set budget alert in Azure
+1. Set a compute budget for your cloud provider
 2. Choose cost variant above (recommend Balanced)
 3. Proceed with training ([TRAINING_PLAN.md](TRAINING_PLAN.md))
 4. Monitor spending in W&B dashboard
-5. Clean up resources after project (see AZURE_SETUP.md cleanup section)
 
 ---
 **Last Updated**: March 2026

@@ -2,78 +2,6 @@
 
 Common issues and solutions for Qwen3-8B fine-tuning project.
 
-## Azure Issues
-
-### Problem: Authentication Failures
-
-**Error**:
-```
-AuthenticationError: Operation returned an invalid status 'Unauthorized'
-```
-
-**Solution**:
-```bash
-# Re-authenticate
-az logout
-az login
-
-# Or use device code
-az login --use-device-code
-
-# Verify authentication
-az account show
-```
-
-### Problem: Insufficient GPU Quota
-
-**Error**:
-```
-Insufficient quota available for SKU STANDARD_NC4AS_T4_V3 in region southindia
-```
-
-**Solutions**:
-1. Request quota increase via Azure Portal:
-   - Home → Subscriptions → Usage + Quotas
-   - Filter by "NCASv3_T4"
-   - Request Increase
-
-2. Use different region:
-   ```bash
-   az ml compute create --size STANDARD_NC4AS_T4_V3 \
-     --location westus3  # Try different region
-   ```
-
-3. Use a larger T4 SKU or different GPU family:
-   ```bash
-   # 4× T4 variant (more vCPUs, same T4 GPU)
-   az ml compute create --size Standard_NC64as_T4_v3 \
-     --tier dedicated
-   ```
-
-### Problem: Job Failures on Dedicated Compute
-
-**Error**:
-```
-Job failed due to compute node issues
-```
-
-**Solutions**:
-1. Enable checkpointing (automatic resume):
-   ```yaml
-   load_best_model_at_end: true
-   resume_from_checkpoint: auto
-   ```
-
-2. If you switch to Spot VMs for cost savings, add preemption handling:
-   ```bash
-   az ml compute create --tier low_priority  # Cheaper, slight preemption risk
-   ```
-
-3. Use low-priority instead of dedicated for cost savings:
-   ```bash
-   az ml compute create --tier low_priority  # More affordable
-   ```
-
 ## Local Training Issues
 
 ### Problem: Out of Memory (OOM)
@@ -456,9 +384,6 @@ FileNotFoundError: outputs/sft/final_adapter/adapter_config.json
 # Verify SFT output exists
 ls outputs/sft/final_adapter/
 
-# If using Azure, download artifacts first
-az ml job download --name <sft-job-name> --download-path outputs/sft/
-
 # Then pass the correct path
 python src/train_grpo.py --sft-adapter outputs/sft/final_adapter ...
 ```
@@ -566,7 +491,6 @@ Get-Volume  # Windows
 
 1. **Check Logs**:
    - Local: `logs/training.log`
-   - Azure: `az ml job stream --name <job-name>`
    - W&B: https://wandb.ai/dhruvanmurthy/qwen3-8b-tool-use
 
 2. **Search Issues**:

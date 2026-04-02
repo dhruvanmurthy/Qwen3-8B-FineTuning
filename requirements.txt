@@ -13,11 +13,8 @@ trl==0.14.0
 wandb==0.16.6
 tensorboard==2.16.2
 
-# Azure
-azure-identity==1.14.0
-azure-storage-blob==12.19.0
-azure-ai-ml==1.12.1
-azure-keyvault-secrets==4.7.0
+# Distributed Training
+deepspeed>=0.14.0; platform_system != "Windows"
 
 # HuggingFace
 huggingface-hub>=0.23.2,<1.0
@@ -59,5 +56,4 @@ onnx==1.16.0
 onnxruntime==1.17.1
 optimum==1.17.0
 
-# Optional: Distributed Training (not needed for STANDARD_NC4AS_T4_V3 single GPU)
-# deepspeed==0.13.1; platform_system != "Windows"
+

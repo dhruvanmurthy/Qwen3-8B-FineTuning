@@ -30,7 +30,6 @@ cp .env.example .env
 # Edit .env with your credentials:
 #   HF_TOKEN=<your_token>
 #   WANDB_API_KEY=<your_key>
-#   AZURE_SUBSCRIPTION_ID=<your_id>  (only for Azure runs)
 ```
 
 ### Step 1.4: Verify Installation
@@ -41,19 +40,9 @@ python -c "from peft import LoraConfig; print('PEFT OK')"
 python -c "from trl import GRPOConfig; print('TRL OK')"
 ```
 
-## Phase 2: Azure Setup — skip if running locally (1 hour)
+## Phase 2: W&B Setup (10 min)
 
-### Step 2.1: Create Azure Resources
-```bash
-bash scripts/setup_azure.sh
-```
-
-### Step 2.2: Verify Resources
-```bash
-az ml compute list --resource-group qwen3-finetuning --workspace-name qwen3-workspace
-```
-
-### Step 2.3: Create W&B Project
+### Step 2.1: Create W&B Project
 ```bash
 wandb login
 # Project: qwen3-8b-tool-use at wandb.ai/dhruvanmurthy/qwen3-8b-tool-use
@@ -193,11 +182,6 @@ huggingface-cli upload dhruvanmurthy/qwen3-8b-tool-use-sft-lora outputs/sft/fina
 huggingface-cli upload dhruvanmurthy/qwen3-8b-tool-use-grpo-lora outputs/grpo/final_adapter
 ```
 
-### Cleanup Azure Resources (if applicable)
-```bash
-bash scripts/cleanup_azure.sh
-```
-
 ## One-Command Full Pipeline
 
 To run everything end-to-end:
@@ -219,8 +203,7 @@ This runs: baseline eval → SFT train → SFT eval → GRPO train → GRPO eval
 - [ ] GRPO evaluation shows improvement over SFT
 - [ ] Comparison table generated
 - [ ] Models pushed to HF Hub
-- [ ] Azure resources cleaned up
-- [ ] Total cost < $150
+- [ ] Total training time within expectations
 
 ---
 

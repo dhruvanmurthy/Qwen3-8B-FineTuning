@@ -423,7 +423,7 @@ Setup guide: https://github.com/dhruvanmurthy/Qwen3-8B-FineTuning
 See CONTRIBUTING.md for:
 - New datasets
 - Evaluation metrics
-- Distributed training
+- Multi-GPU distributed training
 - Cost optimizations
 - Documentation
 
@@ -436,16 +436,14 @@ See CONTRIBUTING.md for:
 
 ```
 ┌──────────────────────────────────────────────┐
-│ BUDGET SUMMARY                               │
+│ TRAINING TIME SUMMARY                        │
 ├──────────────────────────────────────────────┤
-│ Azure T4 Training       20h × $1.50 = $30    │
-│ Storage (100GB)         1mo × $2    = $2     │
-│ Compute (data prep)     5h  × $0.50 = $2.50  │
-│ Evaluation & misc                   = $5-10  │
+│ SFT Training (3 epochs)      ~18h (1× GPU)   │
+│ GRPO Training (50 steps)     ~4h  (1× GPU)   │
+│ Evaluation & misc            ~2h             │
 │                                              │
-│ TOTAL USED :  ~$40                           │
-│ BUDGET     :  $150                           │
-│ REMAINING  :  $110                           │
+│ TOTAL (1× GPU) :  ~24h                       │
+│ TOTAL (4× GPU) :  ~7h                        │
 └──────────────────────────────────────────────┘
 ```
 
@@ -463,9 +461,8 @@ Great for:
 - Customize: configs/training.yaml
 
 ### ☁️ For DevOps/Cloud Engineers
-- Start: AZURE_SETUP.md
-- Then: scripts/setup_azure.sh
-- Monitor: az ml commands, W&B dashboards
+- Start: scripts/run_pipeline.sh
+- Monitor: W&B dashboards
 
 ### 📊 For Data Scientists
 - Start: DATASET_STRATEGY.md
@@ -481,14 +478,13 @@ Great for:
 
 This is a **complete, production-ready project** scaffold. All pieces (code, docs, configs, infrastructure) work together seamlessly.
 
-**You are literally 1 Python command away from training a fine-tuned LLM on Azure.**
+**You are literally 1 Python command away from training a fine-tuned LLM.**
 
 The path forward is clear:
 1. ✅ Run local test (Verify setup works)
-2. ✅ Create Azure resources (Set up infrastructure)
-3. ✅ Prepare data (Assemble training data)
-4. ✅ Train on Azure (Start training job)
-5. ✅ Evaluate & publish (Test & release)
+2. ✅ Prepare data (Assemble training data)
+3. ✅ Train (Start training job — single or multi-GPU)
+4. ✅ Evaluate & publish (Test & release)
 
 **Estimated total effort**: 30-40 hours of elapsed time, 5-10 hours of active work
 

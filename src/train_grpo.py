@@ -51,10 +51,18 @@ def load_sft_model(base_model_name: str, sft_adapter_path: str):
     )
 
     logger.info("Loading base model: %s", base_model_name)
+
+    # In distributed mode (torchrun), pin each process to its local GPU.
+    local_rank = int(os.environ.get("LOCAL_RANK", -1))
+    if local_rank >= 0:
+        device_map = {"":  local_rank}
+    else:
+        device_map = "auto"
+
     model = AutoModelForCausalLM.from_pretrained(
         base_model_name,
         quantization_config=bnb_config,
-        device_map="auto",
+        device_map=device_map,
         trust_remote_code=True,
         torch_dtype=torch.bfloat16,
     )

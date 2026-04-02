@@ -123,13 +123,12 @@ bf16: true  # Use bfloat16 (emulated on T4; switch to fp16 if unstable)
 fp16: false
 
 # ============================================================================
-# SINGLE-GPU NOTE
+# DISTRIBUTED TRAINING (DDP)
 # ============================================================================
-# Current setup: STANDARD_NC4AS_T4_V3 (1× T4 16GB).
-# QLoRA 4-bit uses ~12-15 GB VRAM — no distributed training needed.
-# If you later switch to a multi-GPU SKU, uncomment DDP settings:
-#   ddp_find_unused_parameters: false
-#   ddp_backend: "nccl"
+# Supports single-node multi-GPU via torchrun.
+# Launch with: torchrun --nproc_per_node=<NUM_GPUS> src/train.py ...
+ddp_find_unused_parameters: false
+ddp_backend: "nccl"
 
 # ============================================================================
 # MISCELLANEOUS
