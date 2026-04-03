@@ -28,7 +28,7 @@ from tinker import TensorData
 from huggingface_hub import HfApi, create_repo, upload_folder
 from tinker_cookbook.renderers import get_renderer, get_text_content
 from tinker_cookbook.model_info import get_recommended_renderer_name
-from tinker_cookbook.checkpoint_utils import save_checkpoint
+from tinker_cookbook.checkpoint_utils import save_checkpoint_async, get_last_checkpoint
 
 from data_loader import ToolUseDataLoader
 from rewards import (
@@ -114,9 +114,9 @@ def _init_wandb(args) -> None:
     if not has_wandb_key:
         logger.warning("WANDB_API_KEY not set. W&B logging will be disabled.")
 
-    wandb_entity = args.wandb_entity or os.getenv("WANDB_ENTITY")
+    wandb_entity = os.getenv("WANDB_ENTITY")
     init_kwargs = {
-        "project": args.wandb_project,
+        "project": os.getenv("WANDB_PROJECT", "qwen3-8b-tool-use"),
         "name": args.wandb_run_name or f"grpo-{args.base_model.split('/')[-1]}",
         "tags": ["grpo", "stage2", "rl", "tool-use"],
         "config": {
@@ -288,21 +288,35 @@ async def train_grpo(args):
     logger.info("Connecting to Tinker service...")
     service_client = tinker.ServiceClient()
 
-    # Start from SFT checkpoint if available, otherwise base model
-    sft_checkpoint = args.sft_checkpoint
-    if sft_checkpoint and os.path.isdir(sft_checkpoint):
-        logger.info("Starting GRPO from SFT checkpoint: %s", sft_checkpoint)
+    # Determine start step — resume from last GRPO checkpoint if available
+    grpo_ckpt = get_last_checkpoint(args.output_dir)
+    start_step = 0
+    if grpo_ckpt and grpo_ckpt.state_path:
+        start_step = grpo_ckpt.batch or 0
+        logger.info("Resuming GRPO from checkpoint: %s (step %d)", grpo_ckpt.state_path, start_step)
         training_client = await service_client.create_lora_training_client_async(
             base_model=args.base_model,
             rank=args.lora_rank,
-            checkpoint=sft_checkpoint,
+            checkpoint=grpo_ckpt.state_path,
         )
     else:
-        logger.info("No SFT checkpoint found. Starting GRPO from base model: %s", args.base_model)
-        training_client = await service_client.create_lora_training_client_async(
-            base_model=args.base_model,
-            rank=args.lora_rank,
-        )
+        sft_ckpt = get_last_checkpoint(args.sft_checkpoint) if args.sft_checkpoint else None
+        if sft_ckpt and sft_ckpt.state_path:
+            logger.info("Starting GRPO from SFT checkpoint: %s", sft_ckpt.state_path)
+            training_client = await service_client.create_lora_training_client_async(
+                base_model=args.base_model,
+                rank=args.lora_rank,
+                checkpoint=sft_ckpt.state_path,
+            )
+        else:
+            logger.info(
+                "No valid SFT checkpoint found in '%s'. Starting GRPO from base model: %s",
+                args.sft_checkpoint, args.base_model,
+            )
+            training_client = await service_client.create_lora_training_client_async(
+                base_model=args.base_model,
+                rank=args.lora_rank,
+            )
 
     tokenizer = training_client.get_tokenizer()
 
@@ -334,11 +348,13 @@ async def train_grpo(args):
     logger.info("  Group size      : %d (completions per problem)", args.group_size)
     logger.info("  Max steps       : %d", args.max_steps)
     logger.info("  Max completion  : %d tokens", args.max_completion_length)
+    if start_step > 0:
+        logger.info("  Resuming from   : step %d", start_step)
 
     # ---- GRPO training loop ----
     metrics_history = []
 
-    for step in range(args.max_steps):
+    for step in range(start_step, args.max_steps):
         # 1. Select batch of prompts
         batch_start = (step * args.batch_size) % len(all_prompts)
         batch_prompts = []
@@ -494,18 +510,22 @@ async def train_grpo(args):
         # Save checkpoint
         if args.save_steps > 0 and (step + 1) % args.save_steps == 0:
             logger.info("Saving checkpoint at step %d...", step + 1)
-            await save_checkpoint(
+            await save_checkpoint_async(
                 training_client,
-                step=step + 1,
-                output_dir=args.output_dir,
+                name=f"step-{step + 1}",
+                log_path=args.output_dir,
+                loop_state={"batch": step + 1},
+                kind="both",
             )
 
     # ---- Final save ----
     logger.info("Saving final GRPO weights to %s...", args.output_dir)
-    await save_checkpoint(
+    await save_checkpoint_async(
         training_client,
-        step=args.max_steps,
-        output_dir=args.output_dir,
+        name="final",
+        log_path=args.output_dir,
+        loop_state={"batch": args.max_steps, "final": True},
+        kind="both",
     )
 
     # Save metrics
@@ -516,8 +536,9 @@ async def train_grpo(args):
     logger.info("GRPO training complete! Final reward: %.3f", metrics_history[-1]["reward"])
 
     # ---- Push to Hugging Face Hub ----
-    if args.hf_repo_id:
-        repo_id = _resolve_hf_repo_id(args.hf_repo_id)
+    _hf_repo_id = os.getenv("HF_REPO_ID")
+    if _hf_repo_id:
+        repo_id = _resolve_hf_repo_id(_hf_repo_id + "-grpo")
         await _push_to_hub_async(
             repo_id=repo_id,
             checkpoint_dir=args.output_dir,
@@ -536,7 +557,7 @@ async def train_grpo(args):
             },
         )
     elif os.getenv("HF_TOKEN"):
-        logger.info("HF_TOKEN is set but --hf-repo-id not provided. Skipping Hub upload.")
+        logger.info("HF_TOKEN is set but HF_REPO_ID is not configured. Skipping Hub upload.")
 
     wandb.finish()
 
@@ -671,14 +692,8 @@ def main():
     p.add_argument("--max-completion-length", type=int, default=512)
     p.add_argument("--save-steps", type=int, default=10)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--wandb-project", default="qwen3-8b-tool-use",
-                   help="W&B project name (requires WANDB_API_KEY env var)")
     p.add_argument("--wandb-run-name", default=None,
-                   help="W&B run name (auto-generated if not set)")
-    p.add_argument("--wandb-entity", default=None,
-                   help="W&B entity/team (defaults to WANDB_ENTITY env var)")
-    p.add_argument("--hf-repo-id", default=None,
-                   help="HF repo ID to push to (e.g., username/qwen3-grpo-tool-use). Requires HF_TOKEN env var.")
+                   help="W&B run name (auto-generated if not set; WANDB_PROJECT/WANDB_ENTITY read from .env)")
     p.add_argument("--dry-run", action="store_true", default=False,
                    help="Run local smoke validation without Tinker training calls")
     p.add_argument("--dry-run-steps", type=int, default=3,

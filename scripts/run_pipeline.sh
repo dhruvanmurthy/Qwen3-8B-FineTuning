@@ -65,6 +65,33 @@ if [ -n "$HF_TOKEN" ] && [ -z "$HF_REPO_ID" ]; then
     echo "Warning: HF_TOKEN is set but HF_REPO_ID is empty. Hub upload will be skipped."
 fi
 
+# --------------------------------------------------
+# Helper: extract last sampler_path from checkpoints.jsonl
+# --------------------------------------------------
+_last_sampler_path() {
+    local log_dir="$1"
+    python3 - "$log_dir" <<'PYEOF'
+import json, sys
+from pathlib import Path
+ckpt_file = Path(sys.argv[1]) / "checkpoints.jsonl"
+if not ckpt_file.exists():
+    sys.exit(0)
+last = ""
+with open(ckpt_file) as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            e = json.loads(line)
+            if e.get("sampler_path"):
+                last = e["sampler_path"]
+        except Exception:
+            pass
+print(last)
+PYEOF
+}
+
 echo "============================================="
 echo " Qwen3-8B Tool-Use Fine-Tuning Pipeline"
 if [ "$LOCAL_VALIDATE" = "true" ]; then
@@ -87,12 +114,15 @@ echo "============================================="
 # --------------------------------------------------
 if [[ "$STAGE" == "baseline" || "$STAGE" == "all" ]]; then
     echo ""
-    echo ">>> Stage 0: Baseline Evaluation"
-    python3 src/evaluate.py \
-        --mode baseline \
-        --base-model "$BASE_MODEL" \
-        --wandb-project "$WANDB_PROJECT" \
-        --output outputs/eval_baseline.json
+    if [ "$LOCAL_VALIDATE" = "true" ]; then
+        echo ">>> Stage 0: Baseline Evaluation skipped (LOCAL_VALIDATE — no Tinker inference)"
+    else
+        echo ">>> Stage 0: Baseline Evaluation"
+        python3 src/evaluate.py \
+            --mode baseline \
+            --base-model "$BASE_MODEL" \
+            --output outputs/eval_baseline.json
+    fi
 fi
 
 # --------------------------------------------------
@@ -118,24 +148,24 @@ if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
         --num-epochs 3 \
         --max-seq-length 2048 \
         --logging-steps 10 \
-        --save-steps 100 \
-        --wandb-project "$WANDB_PROJECT" \
-        ${WANDB_ENTITY:+--wandb-entity "$WANDB_ENTITY"} \
-        --wandb-run-name "sft-${BASE_MODEL##*/}" \
-        $DRY_RUN_ARGS \
-        ${HF_REPO_ID:+--hf-repo-id "${HF_REPO_ID}-sft"}
+        --save-steps 25 \
+        $DRY_RUN_ARGS
 
     if [ "$LOCAL_VALIDATE" = "true" ]; then
         echo ">>> Stage 1 evaluation skipped in local validation mode"
     else
         echo ""
         echo ">>> Stage 1: SFT Evaluation"
-        python3 src/evaluate.py \
-            --mode sft \
-            --base-model "$BASE_MODEL" \
-            --sft-adapter "$SFT_OUTPUT" \
-            --wandb-project "$WANDB_PROJECT" \
-            --output outputs/eval_sft.json
+        SFT_SAMPLER=$(_last_sampler_path "$SFT_OUTPUT")
+        if [ -z "$SFT_SAMPLER" ]; then
+            echo "Warning: No sampler_path found in $SFT_OUTPUT/checkpoints.jsonl — skipping SFT eval."
+        else
+            python3 src/evaluate.py \
+                --mode sft \
+                --base-model "$BASE_MODEL" \
+                --sft-sampler-path "$SFT_SAMPLER" \
+                --output outputs/eval_sft.json
+        fi
     fi
 fi
 
@@ -155,24 +185,23 @@ if [[ "$STAGE" == "grpo" || "$STAGE" == "all" ]]; then
         --group-size 8 \
         --max-steps 50 \
         --save-steps 10 \
-        --wandb-project "$WANDB_PROJECT" \
-        ${WANDB_ENTITY:+--wandb-entity "$WANDB_ENTITY"} \
-        --wandb-run-name "grpo-${BASE_MODEL##*/}" \
-        $DRY_RUN_ARGS \
-        ${HF_REPO_ID:+--hf-repo-id "${HF_REPO_ID}-grpo"}
+        $DRY_RUN_ARGS
 
     if [ "$LOCAL_VALIDATE" = "true" ]; then
         echo ">>> Stage 2 evaluation skipped in local validation mode"
     else
         echo ""
         echo ">>> Stage 2: GRPO Evaluation"
-        python3 src/evaluate.py \
-            --mode grpo \
-            --base-model "$BASE_MODEL" \
-            --sft-adapter "$SFT_OUTPUT" \
-            --grpo-adapter "$GRPO_OUTPUT" \
-            --wandb-project "$WANDB_PROJECT" \
-            --output outputs/eval_grpo.json
+        GRPO_SAMPLER=$(_last_sampler_path "$GRPO_OUTPUT")
+        if [ -z "$GRPO_SAMPLER" ]; then
+            echo "Warning: No sampler_path found in $GRPO_OUTPUT/checkpoints.jsonl — skipping GRPO eval."
+        else
+            python3 src/evaluate.py \
+                --mode grpo \
+                --base-model "$BASE_MODEL" \
+                --grpo-sampler-path "$GRPO_SAMPLER" \
+                --output outputs/eval_grpo.json
+        fi
     fi
 fi
 
@@ -182,22 +211,17 @@ fi
 if [[ "$STAGE" == "compare" || "$STAGE" == "all" ]]; then
     if [ "$LOCAL_VALIDATE" = "true" ]; then
         echo ""
-        echo ">>> Stage 3: Baseline-only Evaluation (local validation mode)"
-        python3 src/evaluate.py \
-            --mode baseline \
-            --base-model "$BASE_MODEL" \
-            --max-samples 16 \
-            --wandb-project "$WANDB_PROJECT" \
-            --output outputs/eval_local_validate.json
+        echo ">>> Stage 3: Cross-stage comparison skipped in local validation mode"
     else
         echo ""
         echo ">>> Stage 3: Cross-Stage Comparison"
+        SFT_SAMPLER=$(_last_sampler_path "$SFT_OUTPUT")
+        GRPO_SAMPLER=$(_last_sampler_path "$GRPO_OUTPUT")
         python3 src/evaluate.py \
             --mode compare \
             --base-model "$BASE_MODEL" \
-            --sft-adapter "$SFT_OUTPUT" \
-            --grpo-adapter "$GRPO_OUTPUT" \
-            --wandb-project "$WANDB_PROJECT" \
+            ${SFT_SAMPLER:+--sft-sampler-path "$SFT_SAMPLER"} \
+            ${GRPO_SAMPLER:+--grpo-sampler-path "$GRPO_SAMPLER"} \
             --output outputs/eval_comparison.json
     fi
 fi

@@ -95,12 +95,9 @@ python3 src/train.py \
     --num-epochs "$EPOCHS" \
     --max-seq-length 2048 \
     --logging-steps 10 \
-    --save-steps 100 \
+    --save-steps 25 \
     --seed 42 \
-    --wandb-project "$WANDB_PROJECT" \
-    ${WANDB_ENTITY:+--wandb-entity "$WANDB_ENTITY"} \
-    $DRY_RUN_ARGS \
-    ${HF_REPO_ID:+--hf-repo-id "$HF_REPO_ID"}
+    $DRY_RUN_ARGS
 
 echo "================================================"
 echo "✓ Local training complete"

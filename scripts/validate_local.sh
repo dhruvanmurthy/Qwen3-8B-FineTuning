@@ -41,7 +41,6 @@ python3 src/train.py \
   --max-seq-length 256 \
   --logging-steps 1 \
   --save-steps 0 \
-  --wandb-project "$WANDB_PROJECT" \
   --wandb-run-name "sft-local-dryrun" \
   --dry-run \
   --dry-run-steps 3
@@ -55,7 +54,6 @@ python3 src/train_grpo.py \
   --group-size 2 \
   --max-steps 3 \
   --save-steps 0 \
-  --wandb-project "$WANDB_PROJECT" \
   --wandb-run-name "grpo-local-dryrun" \
   --dry-run \
   --dry-run-steps 3
@@ -65,7 +63,6 @@ python3 src/evaluate.py \
   --mode baseline \
   --base-model "$BASE_MODEL" \
   --max-samples 16 \
-  --wandb-project "$WANDB_PROJECT" \
   --output outputs/eval_local_smoke.json
 
 echo "============================================="

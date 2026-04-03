@@ -27,7 +27,7 @@ from huggingface_hub import HfApi, create_repo, upload_folder
 from tinker_cookbook.renderers import get_renderer, TrainOnWhat
 from tinker_cookbook.supervised import conversation_to_datum
 from tinker_cookbook.model_info import get_recommended_renderer_name
-from tinker_cookbook.checkpoint_utils import save_checkpoint
+from tinker_cookbook.checkpoint_utils import save_checkpoint_async, get_last_checkpoint
 
 from data_loader import ToolUseDataLoader
 
@@ -95,9 +95,9 @@ def _init_wandb(args) -> None:
     if not has_wandb_key:
         logger.warning("WANDB_API_KEY not set. W&B logging will be disabled.")
 
-    wandb_entity = args.wandb_entity or os.getenv("WANDB_ENTITY")
+    wandb_entity = os.getenv("WANDB_ENTITY")
     init_kwargs = {
-        "project": args.wandb_project,
+        "project": os.getenv("WANDB_PROJECT", "qwen3-8b-tool-use"),
         "name": args.wandb_run_name or f"sft-{args.base_model.split('/')[-1]}",
         "tags": ["sft", "stage1", "tool-use"],
         "config": {
@@ -264,11 +264,22 @@ async def train_sft(args):
     logger.info("Connecting to Tinker service...")
     service_client = tinker.ServiceClient()
 
-    logger.info("Creating LoRA training client (base=%s, rank=%d)...", args.base_model, args.lora_rank)
-    training_client = await service_client.create_lora_training_client_async(
-        base_model=args.base_model,
-        rank=args.lora_rank,
-    )
+    # Resume from an existing checkpoint if one exists in the output dir
+    resume_ckpt = get_last_checkpoint(args.output_dir)
+    if resume_ckpt and resume_ckpt.state_path:
+        logger.info("Resuming SFT from checkpoint: %s (step %s)", resume_ckpt.state_path, resume_ckpt.batch)
+        logger.warning("Data will replay from the beginning of epoch 1. Weights are restored.")
+        training_client = await service_client.create_lora_training_client_async(
+            base_model=args.base_model,
+            rank=args.lora_rank,
+            checkpoint=resume_ckpt.state_path,
+        )
+    else:
+        logger.info("Creating new LoRA training client (base=%s, rank=%d)...", args.base_model, args.lora_rank)
+        training_client = await service_client.create_lora_training_client_async(
+            base_model=args.base_model,
+            rank=args.lora_rank,
+        )
     tokenizer = training_client.get_tokenizer()
 
     # ---- Renderer ----
@@ -361,24 +372,29 @@ async def train_sft(args):
 
             if save_every > 0 and global_step % save_every == 0:
                 logger.info("Saving checkpoint at step %d...", global_step)
-                await save_checkpoint(
+                await save_checkpoint_async(
                     training_client,
-                    step=global_step,
-                    output_dir=args.output_dir,
+                    name=f"step-{global_step}",
+                    log_path=args.output_dir,
+                    loop_state={"batch": global_step, "epoch": epoch + 1},
+                    kind="both",
                 )
 
     # ---- Final save ----
     logger.info("Saving final weights to %s...", args.output_dir)
-    await save_checkpoint(
+    await save_checkpoint_async(
         training_client,
-        step=global_step,
-        output_dir=args.output_dir,
+        name="final",
+        log_path=args.output_dir,
+        loop_state={"batch": global_step, "final": True},
+        kind="both",
     )
     logger.info("SFT training complete! %d steps across %d epochs.", global_step, n_epochs)
 
     # ---- Push to Hugging Face Hub ----
-    if args.hf_repo_id:
-        repo_id = _resolve_hf_repo_id(args.hf_repo_id)
+    _hf_repo_id = os.getenv("HF_REPO_ID")
+    if _hf_repo_id:
+        repo_id = _resolve_hf_repo_id(_hf_repo_id + "-sft")
         await _push_to_hub_async(
             repo_id=repo_id,
             checkpoint_dir=args.output_dir,
@@ -395,7 +411,7 @@ async def train_sft(args):
             },
         )
     elif os.getenv("HF_TOKEN"):
-        logger.info("HF_TOKEN is set but --hf-repo-id not provided. Skipping Hub upload.")
+        logger.info("HF_TOKEN is set but HF_REPO_ID is not configured. Skipping Hub upload.")
 
     wandb.finish()
 
@@ -546,14 +562,8 @@ def main():
     p.add_argument("--logging-steps", type=int, default=10)
     p.add_argument("--save-steps", type=int, default=100)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--wandb-project", default="qwen3-8b-tool-use",
-                   help="W&B project name (requires WANDB_API_KEY env var)")
     p.add_argument("--wandb-run-name", default=None,
-                   help="W&B run name (auto-generated if not set)")
-    p.add_argument("--wandb-entity", default=None,
-                   help="W&B entity/team (defaults to WANDB_ENTITY env var)")
-    p.add_argument("--hf-repo-id", default=None,
-                   help="HF repo ID to push to (e.g., username/qwen3-sft-tool-use). Requires HF_TOKEN env var.")
+                   help="W&B run name (auto-generated if not set; WANDB_PROJECT/WANDB_ENTITY read from .env)")
     p.add_argument("--dry-run", action="store_true", default=False,
                    help="Run local smoke validation without Tinker training calls")
     p.add_argument("--dry-run-steps", type=int, default=3,

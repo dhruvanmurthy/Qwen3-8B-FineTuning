@@ -4,12 +4,13 @@ Compares: Baseline (zero-shot) -> SFT -> GRPO
 Metrics: tool selection accuracy, argument accuracy, schema compliance,
 multi-step success, and latency.
 
-Key fixes:
-    - Uses held-out evaluation data (no train-split leakage)
-    - Normalizes heterogeneous dataset schemas before scoring
-    - Extracts only generated tokens (not prompt+generation concatenation)
+All inference runs on Tinker (remote GPU) — no local model loading required.
+Sampling clients are created from:
+  - base model:   create_sampling_client_async(base_model="Qwen/Qwen3-8B")
+  - SFT/GRPO:     create_sampling_client_async(model_path=<tinker:// URI>)
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -21,15 +22,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-import torch
+import tinker
 import wandb
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-try:
-        from peft import PeftModel
-except ImportError:  # Optional at runtime for base-only evaluation
-        PeftModel = None
+from tinker import ServiceClient
+from tinker_cookbook.model_info import get_recommended_renderer_name
+from tinker_cookbook.renderers import get_renderer, get_text_content
+from rewards import extract_tool_call
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -248,66 +247,60 @@ def load_eval_examples(max_samples: int = 1000) -> List[EvalExample]:
 
 
 # -----------------------------------------------------------------------
-# Model loading helpers
+# Checkpoint helper
 # -----------------------------------------------------------------------
 
-def _load_base_model(model_id: str):
-    """Load base model in bf16 for evaluation."""
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        device_map="auto",
-        torch_dtype=torch.bfloat16,
-    )
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    return model, tokenizer
-
-
-def _load_adapter_model(model_id: str, adapter_path: str):
-    """Load base model + LoRA adapter for evaluation."""
-    if PeftModel is None:
-        raise RuntimeError(
-            "peft is not installed. Install it to evaluate adapter checkpoints."
-        )
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        device_map="auto",
-        torch_dtype=torch.bfloat16,
-    )
-    model = PeftModel.from_pretrained(model, adapter_path)
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    return model, tokenizer
+def _read_last_sampler_path(log_dir: str) -> Optional[str]:
+    """Return the sampler_path from the last valid checkpoint in checkpoints.jsonl."""
+    ckpt_file = Path(log_dir) / "checkpoints.jsonl"
+    if not ckpt_file.exists():
+        return None
+    last: Optional[str] = None
+    with open(ckpt_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                if entry.get("sampler_path"):
+                    last = entry["sampler_path"]
+            except json.JSONDecodeError:
+                continue
+    return last
 
 
 # -----------------------------------------------------------------------
-# Core evaluator
+# Core evaluator  (async — all inference on Tinker)
 # -----------------------------------------------------------------------
 
 class ToolUseEvaluator:
-    """Evaluate a single model on tool-use benchmarks."""
+    """Evaluate a single model on tool-use benchmarks via Tinker inference."""
 
-    def __init__(self, model, tokenizer, label: str = "model"):
-        self.model = model
-        self.tokenizer = tokenizer
+    def __init__(self, sampling_client, renderer, label: str = "model"):
+        self.sampling_client = sampling_client
+        self.renderer = renderer
         self.label = label
         self.results: Dict[str, float] = {}
 
     # --- generation ---
 
-    def generate(self, prompt: str, max_new_tokens: int = 512) -> str:
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
-        input_len = inputs["input_ids"].shape[1]
-        with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-            )
-        generated_ids = outputs[0][input_len:]
-        return self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+    async def generate(self, prompt: str, max_new_tokens: int = 512) -> tuple:
+        """Return (text, n_output_tokens) via Tinker sample_async."""
+        convo = [{"role": "user", "content": prompt}]
+        model_input = self.renderer.build_generation_prompt(convo)
+        result = await self.sampling_client.sample_async(
+            prompt=model_input,
+            num_samples=1,
+            sampling_params=tinker.SamplingParams(
+                max_tokens=max_new_tokens,
+                stop=self.renderer.get_stop_sequences(),
+            ),
+        )
+        seq = result.sequences[0]
+        parsed_msg, _ = self.renderer.parse_response(seq.tokens)
+        text = get_text_content(parsed_msg)
+        return text, len(seq.tokens)
 
     # --- tool extraction ---
 
@@ -328,7 +321,7 @@ class ToolUseEvaluator:
 
     # --- benchmarks ---
 
-    def evaluate_tool_selection(self, examples: List[EvalExample]) -> float:
+    async def evaluate_tool_selection(self, examples: List[EvalExample]) -> float:
         logger.info("[%s] Evaluating tool selection…", self.label)
 
         correct = total = 0
@@ -339,7 +332,7 @@ class ToolUseEvaluator:
             if not example.expected_tool:
                 continue
 
-            output = self.generate(example.prompt, max_new_tokens=256)
+            output, _ = await self.generate(example.prompt, max_new_tokens=256)
             predicted = self.extract_tool_name(output)
 
             if predicted and predicted.lower() == example.expected_tool.lower():
@@ -351,7 +344,7 @@ class ToolUseEvaluator:
         logger.info("[%s] Tool Selection: %.1f%%", self.label, 100 * accuracy)
         return accuracy
 
-    def evaluate_argument_accuracy(self, examples: List[EvalExample]) -> float:
+    async def evaluate_argument_accuracy(self, examples: List[EvalExample]) -> float:
         logger.info("[%s] Evaluating argument accuracy…", self.label)
 
         correct = total = 0
@@ -359,9 +352,8 @@ class ToolUseEvaluator:
             if not example.expected_args:
                 continue
 
-            output = self.generate(example.prompt, max_new_tokens=256)
+            output, _ = await self.generate(example.prompt, max_new_tokens=256)
 
-            from rewards import extract_tool_call
             call = extract_tool_call(output)
             if call:
                 pred_args = call.get("arguments", call.get("parameters", {}))
@@ -374,14 +366,13 @@ class ToolUseEvaluator:
         logger.info("[%s] Argument Accuracy: %.1f%%", self.label, 100 * accuracy)
         return accuracy
 
-    def evaluate_schema_compliance(self, examples: List[EvalExample]) -> float:
+    async def evaluate_schema_compliance(self, examples: List[EvalExample]) -> float:
         logger.info("[%s] Evaluating schema compliance…", self.label)
 
         valid = total = 0
         for example in examples:
-            output = self.generate(example.prompt, max_new_tokens=256)
+            output, _ = await self.generate(example.prompt, max_new_tokens=256)
 
-            from rewards import extract_tool_call
             call = extract_tool_call(output)
             if (
                 call
@@ -396,13 +387,13 @@ class ToolUseEvaluator:
         logger.info("[%s] Schema Compliance: %.1f%%", self.label, 100 * rate)
         return rate
 
-    def evaluate_multi_step(self, examples: List[EvalExample]) -> float:
+    async def evaluate_multi_step(self, examples: List[EvalExample]) -> float:
         logger.info("[%s] Evaluating multi-step chains…", self.label)
         multi_step = [e for e in examples if len(e.expected_chain) > 1]
 
         correct = total = 0
         for example in multi_step:
-            output = self.generate(example.prompt, max_new_tokens=512)
+            output, _ = await self.generate(example.prompt, max_new_tokens=512)
             found = sum(1 for t in example.expected_chain if t.lower() in output.lower())
             if found == len(example.expected_chain):
                 correct += 1
@@ -413,18 +404,17 @@ class ToolUseEvaluator:
         logger.info("[%s] Multi-Step Success: %.1f%%", self.label, 100 * rate)
         return rate
 
-    def evaluate_latency(self, examples: List[EvalExample], num_samples: int = 100) -> float:
+    async def evaluate_latency(self, examples: List[EvalExample], num_samples: int = 100) -> float:
         logger.info("[%s] Evaluating latency…", self.label)
         subset = examples[:num_samples]
 
         times, total_tokens = [], 0
         for example in subset:
             start = time.time()
-            output = self.generate(example.prompt, max_new_tokens=256)
+            output, n_tokens = await self.generate(example.prompt, max_new_tokens=256)
             elapsed = time.time() - start
-            n_tok = len(self.tokenizer(output)["input_ids"])
             times.append(elapsed)
-            total_tokens += n_tok
+            total_tokens += n_tokens
 
         if not times or total_tokens == 0:
             self.results["avg_latency_ms"] = 0.0
@@ -438,12 +428,12 @@ class ToolUseEvaluator:
         logger.info("[%s] Latency: %.3fs (%.1f ms/token)", self.label, avg_time, ms_per_token)
         return ms_per_token
 
-    def evaluate_all(self, examples: List[EvalExample]) -> Dict[str, float]:
-        self.evaluate_tool_selection(examples)
-        self.evaluate_argument_accuracy(examples)
-        self.evaluate_schema_compliance(examples)
-        self.evaluate_multi_step(examples)
-        self.evaluate_latency(examples, num_samples=100)
+    async def evaluate_all(self, examples: List[EvalExample]) -> Dict[str, float]:
+        await self.evaluate_tool_selection(examples)
+        await self.evaluate_argument_accuracy(examples)
+        await self.evaluate_schema_compliance(examples)
+        await self.evaluate_multi_step(examples)
+        await self.evaluate_latency(examples, num_samples=100)
         # Log all aggregate metrics to W&B summary for this stage
         for k, v in self.results.items():
             wandb.summary[f"{self.label}/{k}"] = v
@@ -498,78 +488,116 @@ def compare_stages(all_results: Dict[str, Dict[str, float]]) -> str:
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="Three-stage evaluation")
+    parser = argparse.ArgumentParser(description="Three-stage evaluation (Tinker inference)")
     parser.add_argument(
         "--mode",
         choices=["baseline", "sft", "grpo", "compare", "all"],
         default="all",
         help="Which stage(s) to evaluate",
     )
-    parser.add_argument("--base-model", default="Qwen/Qwen3-8B")
-    parser.add_argument("--sft-adapter", default="./outputs/sft")
-    parser.add_argument("--grpo-adapter", default="./outputs/grpo")
+    parser.add_argument("--base-model", default="Qwen/Qwen3-8B",
+                        help="HF model ID used for baseline Tinker inference")
+    parser.add_argument(
+        "--sft-sampler-path",
+        default=None,
+        help="tinker:// URI for SFT sampler weights. "
+             "Falls back to reading the last sampler_path in outputs/sft/checkpoints.jsonl",
+    )
+    parser.add_argument(
+        "--grpo-sampler-path",
+        default=None,
+        help="tinker:// URI for GRPO sampler weights. "
+             "Falls back to reading the last sampler_path in outputs/grpo/checkpoints.jsonl",
+    )
+    parser.add_argument("--sft-output-dir", default="./outputs/sft",
+                        help="Local dir containing SFT checkpoints.jsonl (auto-detect fallback)")
+    parser.add_argument("--grpo-output-dir", default="./outputs/grpo",
+                        help="Local dir containing GRPO checkpoints.jsonl (auto-detect fallback)")
     parser.add_argument("--output", default="outputs/evaluation_results.json")
     parser.add_argument("--max-samples", type=int, default=1000)
-    parser.add_argument("--wandb-project", default="qwen3-8b-tool-use",
-                        help="W&B project name (requires WANDB_API_KEY env var)")
     args = parser.parse_args()
 
-    examples = load_eval_examples(max_samples=args.max_samples)
-    if not examples:
-        raise RuntimeError("No evaluation examples available.")
-    logger.info("Using %d held-out evaluation examples", len(examples))
+    asyncio.run(_run_eval(args))
 
+
+async def _run_eval(args) -> None:
+    """Async evaluation loop — all inference on Tinker."""
+
+    # ---- Tinker service client ----
+    if not os.getenv("TINKER_API_KEY"):
+        raise RuntimeError(
+            "TINKER_API_KEY environment variable is required for Tinker-based evaluation."
+        )
+    service_client = ServiceClient()
+
+    # ---- Resolve sampler paths ----
+    sft_sampler = args.sft_sampler_path or _read_last_sampler_path(args.sft_output_dir)
+    grpo_sampler = args.grpo_sampler_path or _read_last_sampler_path(args.grpo_output_dir)
+
+    if args.mode in ("sft", "compare", "all") and not sft_sampler:
+        raise RuntimeError(
+            f"SFT sampler path not provided and not found in {args.sft_output_dir}/checkpoints.jsonl. "
+            "Run SFT training first, or pass --sft-sampler-path explicitly."
+        )
+    if args.mode in ("grpo", "compare", "all") and not grpo_sampler:
+        raise RuntimeError(
+            f"GRPO sampler path not provided and not found in {args.grpo_output_dir}/checkpoints.jsonl. "
+            "Run GRPO training first, or pass --grpo-sampler-path explicitly."
+        )
+
+    # ---- W&B init ----
     wandb.init(
-        project=args.wandb_project,
+        project=os.getenv("WANDB_PROJECT", "qwen3-8b-tool-use"),
+        entity=os.getenv("WANDB_ENTITY") or None,
         name=f"eval-{args.mode}-{args.base_model.split('/')[-1]}",
         tags=["evaluation", args.mode, "tool-use"],
         config={
             "base_model": args.base_model,
             "mode": args.mode,
             "max_samples": args.max_samples,
-            "sft_adapter": args.sft_adapter,
-            "grpo_adapter": args.grpo_adapter,
-            "n_eval_examples": len(examples),
+            "sft_sampler_path": sft_sampler,
+            "grpo_sampler_path": grpo_sampler,
         },
         mode="disabled" if not os.getenv("WANDB_API_KEY") else "online",
     )
 
-    all_results = {}
+    examples = load_eval_examples(max_samples=args.max_samples)
+    if not examples:
+        raise RuntimeError("No evaluation examples available.")
+    logger.info("Using %d held-out evaluation examples", len(examples))
+    wandb.config.update({"n_eval_examples": len(examples)}, allow_val_change=True)
+
+    # ---- Helper: build (sampling_client, renderer) for a stage ----
+    async def _make_evaluator(label: str, model_path: Optional[str] = None) -> ToolUseEvaluator:
+        logger.info("Creating Tinker sampling client for stage: %s", label)
+        if model_path:
+            sc = await service_client.create_sampling_client_async(model_path=model_path)
+        else:
+            sc = await service_client.create_sampling_client_async(base_model=args.base_model)
+        tokenizer = sc.get_tokenizer()
+        renderer_name = get_recommended_renderer_name(args.base_model)
+        renderer = get_renderer(renderer_name, tokenizer)
+        return ToolUseEvaluator(sc, renderer, label=label)
+
+    all_results: Dict[str, Dict[str, float]] = {}
 
     # --- baseline ---
     if args.mode in ("baseline", "compare", "all"):
         logger.info(">>> Baseline evaluation")
-        model, tok = _load_base_model(args.base_model)
-        ev = ToolUseEvaluator(model, tok, label="baseline")
-        all_results["baseline"] = ev.evaluate_all(examples)
-        del model, tok
-        torch.cuda.empty_cache()
+        ev = await _make_evaluator("baseline")
+        all_results["baseline"] = await ev.evaluate_all(examples)
 
     # --- SFT ---
     if args.mode in ("sft", "compare", "all"):
-        logger.info(">>> SFT evaluation")
-        model, tok = _load_adapter_model(args.base_model, args.sft_adapter)
-        ev = ToolUseEvaluator(model, tok, label="sft")
-        all_results["sft"] = ev.evaluate_all(examples)
-        del model, tok
-        torch.cuda.empty_cache()
+        logger.info(">>> SFT evaluation  (sampler: %s)", sft_sampler)
+        ev = await _make_evaluator("sft", model_path=sft_sampler)
+        all_results["sft"] = await ev.evaluate_all(examples)
 
     # --- GRPO ---
     if args.mode in ("grpo", "compare", "all"):
-        logger.info(">>> GRPO evaluation")
-        # GRPO adapter sits on top of SFT-merged weights.
-        # Load base -> merge SFT -> load GRPO adapter.
-        model, tok = _load_base_model(args.base_model)
-        if PeftModel is None:
-            raise RuntimeError("peft is required for adapter evaluation (sft/grpo modes).")
-        if os.path.isdir(args.sft_adapter):
-            model = PeftModel.from_pretrained(model, args.sft_adapter)
-            model = model.merge_and_unload()
-        model = PeftModel.from_pretrained(model, args.grpo_adapter)
-        ev = ToolUseEvaluator(model, tok, label="grpo")
-        all_results["grpo"] = ev.evaluate_all(examples)
-        del model, tok
-        torch.cuda.empty_cache()
+        logger.info(">>> GRPO evaluation  (sampler: %s)", grpo_sampler)
+        ev = await _make_evaluator("grpo", model_path=grpo_sampler)
+        all_results["grpo"] = await ev.evaluate_all(examples)
 
     # --- comparison table ---
     if len(all_results) > 1:
