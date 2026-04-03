@@ -50,6 +50,47 @@ TOOL_USE_SYSTEM_PROMPT = (
 )
 
 
+def _run_dry_run_grpo(args, n_prompts: int) -> None:
+    """Run a local no-op GRPO path to validate script wiring without Tinker."""
+    logger.warning("Dry-run mode enabled: skipping Tinker remote training.")
+    steps = max(1, args.dry_run_steps)
+    metrics_history = []
+    for step in range(steps):
+        reward = min(1.0, 0.2 + 0.1 * step)
+        frac_degenerate = max(0.0, 0.6 - 0.05 * step)
+        log_dict = {
+            "train/reward_mean": reward,
+            "train/frac_degenerate": frac_degenerate,
+            "train/n_datums": args.batch_size * args.group_size,
+            "train/n_degenerate_groups": int(args.batch_size * frac_degenerate),
+        }
+        wandb.log(log_dict, step=step)
+        metrics_history.append({
+            "step": step,
+            "reward": reward,
+            "frac_degenerate": frac_degenerate,
+            "n_datums": args.batch_size * args.group_size,
+        })
+
+    metrics_path = os.path.join(args.output_dir, "grpo_metrics.json")
+    with open(metrics_path, "w", encoding="utf-8") as f:
+        json.dump(metrics_history, f, indent=2)
+
+    summary = {
+        "mode": "dry_run",
+        "stage": "grpo",
+        "base_model": args.base_model,
+        "dry_run_steps": steps,
+        "n_prompts": n_prompts,
+        "batch_size": args.batch_size,
+        "group_size": args.group_size,
+    }
+    summary_path = Path(args.output_dir) / "dry_run_summary.json"
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+    logger.info("Wrote dry-run summary: %s", summary_path)
+
+
 def _resolve_hf_repo_id(repo_id: str) -> str:
     """Resolve short repo names using HF_USER if available."""
     if not repo_id:
@@ -226,6 +267,11 @@ async def train_grpo(args):
 
     # ---- W&B ----
     _init_wandb(args)
+
+    if args.dry_run:
+        _run_dry_run_grpo(args, n_prompts=args.dry_run_prompts)
+        wandb.finish()
+        return
 
     # ---- Load prompt dataset ----
     logger.info("Building prompt dataset...")
@@ -633,6 +679,12 @@ def main():
                    help="W&B entity/team (defaults to WANDB_ENTITY env var)")
     p.add_argument("--hf-repo-id", default=None,
                    help="HF repo ID to push to (e.g., username/qwen3-grpo-tool-use). Requires HF_TOKEN env var.")
+    p.add_argument("--dry-run", action="store_true", default=False,
+                   help="Run local smoke validation without Tinker training calls")
+    p.add_argument("--dry-run-steps", type=int, default=3,
+                   help="Number of mock steps to log when --dry-run is enabled")
+    p.add_argument("--dry-run-prompts", type=int, default=32,
+                   help="Synthetic prompt count to report in --dry-run mode")
     a = p.parse_args()
 
     class _Args:

@@ -43,6 +43,35 @@ TOOL_USE_SYSTEM_PROMPT = (
 )
 
 
+def _run_dry_run_sft(args, n_train: int, n_val: int) -> None:
+    """Run a local no-op training path to validate script wiring without Tinker."""
+    logger.warning("Dry-run mode enabled: skipping Tinker remote training.")
+    steps = max(1, args.dry_run_steps)
+    for step in range(1, steps + 1):
+        mock_loss = max(0.0, 1.0 - 0.05 * step)
+        wandb.log(
+            {
+                "train/epoch": 1,
+                "train/loss": mock_loss,
+                "train/samples_seen": step * args.batch_size,
+            },
+            step=step,
+        )
+
+    summary = {
+        "mode": "dry_run",
+        "stage": "sft",
+        "base_model": args.base_model,
+        "dry_run_steps": steps,
+        "n_train_conversations": n_train,
+        "n_val_conversations": n_val,
+    }
+    summary_path = Path(args.output_dir) / "dry_run_summary.json"
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+    logger.info("Wrote dry-run summary: %s", summary_path)
+
+
 def _resolve_hf_repo_id(repo_id: str) -> str:
     """Resolve short repo names using HF_USER if available."""
     if not repo_id:
@@ -221,6 +250,15 @@ async def train_sft(args):
     val_conversations = conversations[:n_val]
     train_conversations = conversations[n_val:]
     logger.info("Train: %d, Validation: %d conversations", len(train_conversations), len(val_conversations))
+
+    if args.dry_run:
+        _run_dry_run_sft(
+            args,
+            n_train=len(train_conversations),
+            n_val=len(val_conversations),
+        )
+        wandb.finish()
+        return
 
     # ---- Connect to Tinker ----
     logger.info("Connecting to Tinker service...")
@@ -516,6 +554,10 @@ def main():
                    help="W&B entity/team (defaults to WANDB_ENTITY env var)")
     p.add_argument("--hf-repo-id", default=None,
                    help="HF repo ID to push to (e.g., username/qwen3-sft-tool-use). Requires HF_TOKEN env var.")
+    p.add_argument("--dry-run", action="store_true", default=False,
+                   help="Run local smoke validation without Tinker training calls")
+    p.add_argument("--dry-run-steps", type=int, default=3,
+                   help="Number of mock steps to log when --dry-run is enabled")
     a = p.parse_args()
 
     # Convert argparse namespace

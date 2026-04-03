@@ -34,12 +34,23 @@ OUTPUT_DIR="${OUTPUT_DIR:-./outputs/local_test}"
 WANDB_PROJECT="${WANDB_PROJECT:-qwen3-8b-tool-use}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 HF_REPO_ID="${HF_REPO_ID:-}"
+LOCAL_VALIDATE="${LOCAL_VALIDATE:-false}"
+DRY_RUN_ARGS=""
 
-# Verify Tinker API key
-if [ -z "$TINKER_API_KEY" ]; then
+# Verify Tinker API key unless local validation mode is enabled
+if [ "$LOCAL_VALIDATE" != "true" ] && [ -z "$TINKER_API_KEY" ]; then
     echo "Error: TINKER_API_KEY not set."
     echo "Get one at https://tinker-console.thinkingmachines.ai/"
     exit 1
+fi
+
+if [ "$LOCAL_VALIDATE" = "true" ]; then
+    echo "Info: LOCAL_VALIDATE=true, running SFT in --dry-run mode."
+    if [ "$BASE_MODEL" = "Qwen/Qwen3-8B" ]; then
+        BASE_MODEL="sshleifer/tiny-gpt2"
+    fi
+    HF_REPO_ID=""
+    DRY_RUN_ARGS="--dry-run --dry-run-steps 3"
 fi
 
 if [ -z "$WANDB_API_KEY" ]; then
@@ -88,6 +99,7 @@ python3 src/train.py \
     --seed 42 \
     --wandb-project "$WANDB_PROJECT" \
     ${WANDB_ENTITY:+--wandb-entity "$WANDB_ENTITY"} \
+    $DRY_RUN_ARGS \
     ${HF_REPO_ID:+--hf-repo-id "$HF_REPO_ID"}
 
 echo "================================================"

@@ -35,11 +35,22 @@ GRPO_OUTPUT="${GRPO_OUTPUT:-./outputs/grpo}"
 WANDB_PROJECT="${WANDB_PROJECT:-qwen3-8b-tool-use}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 HF_REPO_ID="${HF_REPO_ID:-}"
+LOCAL_VALIDATE="${LOCAL_VALIDATE:-false}"
+DRY_RUN_ARGS=""
 
-# Verify Tinker API key
-if [ -z "$TINKER_API_KEY" ]; then
+# Verify Tinker API key unless local validation mode is enabled
+if [ "$LOCAL_VALIDATE" != "true" ] && [ -z "$TINKER_API_KEY" ]; then
     echo "Error: TINKER_API_KEY not set. Get one at https://tinker-console.thinkingmachines.ai/"
     exit 1
+fi
+
+if [ "$LOCAL_VALIDATE" = "true" ]; then
+    echo "Info: LOCAL_VALIDATE=true, training stages will run in --dry-run mode."
+    if [ "$BASE_MODEL" = "Qwen/Qwen3-8B" ]; then
+        BASE_MODEL="sshleifer/tiny-gpt2"
+    fi
+    HF_REPO_ID=""
+    DRY_RUN_ARGS="--dry-run --dry-run-steps 3"
 fi
 
 if [ -z "$WANDB_API_KEY" ]; then
@@ -56,7 +67,11 @@ fi
 
 echo "============================================="
 echo " Qwen3-8B Tool-Use Fine-Tuning Pipeline"
-echo " (Tinker Remote Training)"
+if [ "$LOCAL_VALIDATE" = "true" ]; then
+    echo " (Local Validation Mode)"
+else
+    echo " (Tinker Remote Training)"
+fi
 echo "============================================="
 echo "  Base model      : $BASE_MODEL"
 echo "  SFT output      : $SFT_OUTPUT"
@@ -107,16 +122,21 @@ if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
         --wandb-project "$WANDB_PROJECT" \
         ${WANDB_ENTITY:+--wandb-entity "$WANDB_ENTITY"} \
         --wandb-run-name "sft-${BASE_MODEL##*/}" \
+        $DRY_RUN_ARGS \
         ${HF_REPO_ID:+--hf-repo-id "${HF_REPO_ID}-sft"}
 
-    echo ""
-    echo ">>> Stage 1: SFT Evaluation"
-    python3 src/evaluate.py \
-        --mode sft \
-        --base-model "$BASE_MODEL" \
-        --sft-adapter "$SFT_OUTPUT" \
-        --wandb-project "$WANDB_PROJECT" \
-        --output outputs/eval_sft.json
+    if [ "$LOCAL_VALIDATE" = "true" ]; then
+        echo ">>> Stage 1 evaluation skipped in local validation mode"
+    else
+        echo ""
+        echo ">>> Stage 1: SFT Evaluation"
+        python3 src/evaluate.py \
+            --mode sft \
+            --base-model "$BASE_MODEL" \
+            --sft-adapter "$SFT_OUTPUT" \
+            --wandb-project "$WANDB_PROJECT" \
+            --output outputs/eval_sft.json
+    fi
 fi
 
 # --------------------------------------------------
@@ -138,32 +158,48 @@ if [[ "$STAGE" == "grpo" || "$STAGE" == "all" ]]; then
         --wandb-project "$WANDB_PROJECT" \
         ${WANDB_ENTITY:+--wandb-entity "$WANDB_ENTITY"} \
         --wandb-run-name "grpo-${BASE_MODEL##*/}" \
+        $DRY_RUN_ARGS \
         ${HF_REPO_ID:+--hf-repo-id "${HF_REPO_ID}-grpo"}
 
-    echo ""
-    echo ">>> Stage 2: GRPO Evaluation"
-    python3 src/evaluate.py \
-        --mode grpo \
-        --base-model "$BASE_MODEL" \
-        --sft-adapter "$SFT_OUTPUT" \
-        --grpo-adapter "$GRPO_OUTPUT" \
-        --wandb-project "$WANDB_PROJECT" \
-        --output outputs/eval_grpo.json
+    if [ "$LOCAL_VALIDATE" = "true" ]; then
+        echo ">>> Stage 2 evaluation skipped in local validation mode"
+    else
+        echo ""
+        echo ">>> Stage 2: GRPO Evaluation"
+        python3 src/evaluate.py \
+            --mode grpo \
+            --base-model "$BASE_MODEL" \
+            --sft-adapter "$SFT_OUTPUT" \
+            --grpo-adapter "$GRPO_OUTPUT" \
+            --wandb-project "$WANDB_PROJECT" \
+            --output outputs/eval_grpo.json
+    fi
 fi
 
 # --------------------------------------------------
 # Stage 3 — Cross-stage comparison
 # --------------------------------------------------
 if [[ "$STAGE" == "compare" || "$STAGE" == "all" ]]; then
-    echo ""
-    echo ">>> Stage 3: Cross-Stage Comparison"
-    python3 src/evaluate.py \
-        --mode compare \
-        --base-model "$BASE_MODEL" \
-        --sft-adapter "$SFT_OUTPUT" \
-        --grpo-adapter "$GRPO_OUTPUT" \
-        --wandb-project "$WANDB_PROJECT" \
-        --output outputs/eval_comparison.json
+    if [ "$LOCAL_VALIDATE" = "true" ]; then
+        echo ""
+        echo ">>> Stage 3: Baseline-only Evaluation (local validation mode)"
+        python3 src/evaluate.py \
+            --mode baseline \
+            --base-model "$BASE_MODEL" \
+            --max-samples 16 \
+            --wandb-project "$WANDB_PROJECT" \
+            --output outputs/eval_local_validate.json
+    else
+        echo ""
+        echo ">>> Stage 3: Cross-Stage Comparison"
+        python3 src/evaluate.py \
+            --mode compare \
+            --base-model "$BASE_MODEL" \
+            --sft-adapter "$SFT_OUTPUT" \
+            --grpo-adapter "$GRPO_OUTPUT" \
+            --wandb-project "$WANDB_PROJECT" \
+            --output outputs/eval_comparison.json
+    fi
 fi
 
 echo ""
