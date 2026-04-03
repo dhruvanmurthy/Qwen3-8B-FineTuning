@@ -9,7 +9,6 @@
 model_name_or_path: "Qwen/Qwen3-8B"
 torch_dtype: "bfloat16"
 device_map: "auto"
-trust_remote_code: true
 
 # Quantization (4-bit for memory efficiency)
 load_in_4bit: true

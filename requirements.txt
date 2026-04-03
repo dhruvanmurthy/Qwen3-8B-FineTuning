@@ -2,19 +2,14 @@
 torch==2.2.2
 transformers==4.51.0
 datasets==2.21.0
-accelerate==0.34.0
-peft==0.11.1
-bitsandbytes==0.45.5
 
-# GRPO / Online RL
-trl==0.14.0
+# Tinker (remote GPU training)
+tinker>=0.2.0
+tinker-cookbook>=0.2.0
 
 # Training & Optimization
-wandb==0.16.6
+wandb>=0.16.6
 tensorboard==2.16.2
-
-# Distributed Training
-deepspeed>=0.14.0; platform_system != "Windows"
 
 # HuggingFace
 huggingface-hub>=0.23.2,<1.0

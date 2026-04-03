@@ -1,9 +1,12 @@
 #!/bin/bash
-# Three-stage training & evaluation pipeline
+# Three-stage training & evaluation pipeline (Tinker)
 #   Stage 0: Baseline evaluation (zero-shot)
 #   Stage 1: SFT training + evaluation
 #   Stage 2: GRPO training + evaluation
 #   Stage 3: Cross-stage comparison
+#
+# Training runs on Tinker's remote GPUs — no local GPU required.
+# Requires: TINKER_API_KEY environment variable.
 #
 # Usage:
 #   bash scripts/run_pipeline.sh           # run everything
@@ -11,42 +14,31 @@
 #   bash scripts/run_pipeline.sh sft       # only SFT stage
 #   bash scripts/run_pipeline.sh grpo      # only GRPO stage
 #   bash scripts/run_pipeline.sh compare   # only comparison
-#
-# Multi-GPU:
-#   GPUS=4 bash scripts/run_pipeline.sh    # use 4 GPUs
 
 set -e
 
 # Always run from the repo root
-cd "$(dirname "$0")/.." 
+cd "$(dirname "$0")/.."
 
 STAGE="${1:-all}"
 BASE_MODEL="${BASE_MODEL:-Qwen/Qwen3-8B}"
 SFT_OUTPUT="${SFT_OUTPUT:-./outputs/sft}"
 GRPO_OUTPUT="${GRPO_OUTPUT:-./outputs/grpo}"
 
-# GPU detection — default to all visible GPUs
-if [ -z "$GPUS" ]; then
-    GPUS=$(python3 -c "import torch; print(torch.cuda.device_count())" 2>/dev/null || echo "1")
+# Verify Tinker API key
+if [ -z "$TINKER_API_KEY" ]; then
+    echo "Error: TINKER_API_KEY not set. Get one at https://tinker-console.thinkingmachines.ai/"
+    exit 1
 fi
-
-# Helper: launch with torchrun when multi-GPU, plain python otherwise
-run_train() {
-    if [ "$GPUS" -gt 1 ]; then
-        torchrun --nproc_per_node="$GPUS" "$@"
-    else
-        python3 "$@"
-    fi
-}
 
 echo "============================================="
 echo " Qwen3-8B Tool-Use Fine-Tuning Pipeline"
+echo " (Tinker Remote Training)"
 echo "============================================="
 echo "  Base model : $BASE_MODEL"
 echo "  SFT output : $SFT_OUTPUT"
 echo "  GRPO output: $GRPO_OUTPUT"
 echo "  Stage      : $STAGE"
-echo "  GPUs       : $GPUS"
 echo "============================================="
 
 # --------------------------------------------------
@@ -66,29 +58,25 @@ fi
 # --------------------------------------------------
 if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
     echo ""
-    echo ">>> Stage 1: SFT Training"
-    run_train src/train.py \
-        --model_name_or_path "$BASE_MODEL" \
-        --output_dir "$SFT_OUTPUT" \
-        --num_train_epochs 3 \
-        --per_device_train_batch_size 16 \
-        --gradient_accumulation_steps 2 \
-        --learning_rate 2e-4 \
-        --warmup_ratio 0.1 \
-        --weight_decay 0.01 \
-        --eval_strategy steps \
-        --eval_steps 250 \
-        --save_strategy steps \
-        --save_steps 250 \
-        --save_total_limit 3 \
-        --load_best_model_at_end \
-        --bf16 \
-        --gradient_checkpointing \
-        --ddp_find_unused_parameters false \
-        --ddp_backend nccl \
-        --logging_steps 10 \
-        --report_to wandb \
-        --seed 42
+    echo ">>> Stage 1: SFT Training (Tinker)"
+
+    # Generate synthetic data if not present
+    if [ ! -d "data/raw/synthetic" ] || [ -z "$(ls data/raw/synthetic/*.jsonl 2>/dev/null)" ]; then
+        echo ">>> Generating synthetic training data..."
+        python3 scripts/generate_synthetic.py
+    fi
+
+    python3 src/train.py \
+        --base-model "$BASE_MODEL" \
+        --synthetic-data-dir "./data/raw/synthetic" \
+        --output-dir "$SFT_OUTPUT" \
+        --lora-rank 64 \
+        --learning-rate 2e-4 \
+        --batch-size 8 \
+        --num-epochs 3 \
+        --max-seq-length 2048 \
+        --logging-steps 10 \
+        --save-steps 100
 
     echo ""
     echo ">>> Stage 1: SFT Evaluation"
@@ -104,18 +92,17 @@ fi
 # --------------------------------------------------
 if [[ "$STAGE" == "grpo" || "$STAGE" == "all" ]]; then
     echo ""
-    echo ">>> Stage 2: GRPO Training (LoRA r=32, LR 3e-5, batch 128, group 16, 50 steps)"
-    run_train src/train_grpo.py \
-        --sft-adapter-path "$SFT_OUTPUT" \
-        --base-model-name "$BASE_MODEL" \
+    echo ">>> Stage 2: GRPO Training (Tinker, LoRA r=32, LR 4e-5, group 8, 50 steps)"
+    python3 src/train_grpo.py \
+        --base-model "$BASE_MODEL" \
+        --sft-checkpoint "$SFT_OUTPUT" \
         --output-dir "$GRPO_OUTPUT" \
-        --lora-r 32 \
-        --learning-rate 3e-5 \
+        --lora-rank 32 \
+        --learning-rate 4e-5 \
+        --batch-size 16 \
+        --group-size 8 \
         --max-steps 50 \
-        --per-device-train-batch-size 4 \
-        --gradient-accumulation-steps 32 \
-        --num-generations 16 \
-        --report-to wandb
+        --save-steps 10
 
     echo ""
     echo ">>> Stage 2: GRPO Evaluation"

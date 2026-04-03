@@ -1,291 +1,499 @@
 """
-Main training script for Qwen3-8B QLoRA fine-tuning.
+Tinker SFT training script for Qwen3-8B tool-use fine-tuning.
+
+Stage 1: Supervised fine-tuning on tool-use conversations.
+
+Uses Tinker's remote GPU infrastructure for training:
+  - Data preparation runs locally (CPU)
+  - Forward/backward passes run on Tinker's remote GPUs
+  - LoRA adapters are trained via cross-entropy loss
+
+Requires: TINKER_API_KEY environment variable.
 """
 
+import argparse
+import asyncio
 import json
 import logging
 import os
-from dataclasses import dataclass, field
-from typing import Optional
+import random
+from pathlib import Path
+from typing import Dict, List, Optional
 
+import wandb
 import torch
-import transformers
-import yaml
-from datasets import DatasetDict
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
-    BitsAndBytesConfig,
-    DataCollatorForLanguageModeling,
-    EarlyStoppingCallback,
-    HfArgumentParser,
-    Trainer,
-    TrainingArguments
-)
+import tinker
+from huggingface_hub import HfApi, create_repo, upload_folder
+from tinker_cookbook.renderers import get_renderer, TrainOnWhat
+from tinker_cookbook.supervised import conversation_to_datum
+from tinker_cookbook.model_info import get_recommended_renderer_name
+from tinker_cookbook.checkpoint_utils import save_checkpoint
 
-# Local imports
 from data_loader import ToolUseDataLoader
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class ModelArguments:
-    """Arguments for model loading."""
-    model_name_or_path: str = field(
-        default="Qwen/Qwen3-8B",
-        metadata={"help": "Path to model or model ID"}
-    )
-    torch_dtype: str = field(
-        default="bfloat16",
-        metadata={"help": "Torch dtype: bfloat16, float16"}
-    )
-    load_in_4bit: bool = field(
-        default=True,
-        metadata={"help": "Load in 4-bit quantization"}
-    )
+TOOL_USE_SYSTEM_PROMPT = (
+    "You are a helpful assistant that can use tools. "
+    "When you need to use a tool, respond with a JSON tool call "
+    "inside <tool_call> tags, like:\n"
+    "<tool_call>\n"
+    '{"name": "tool_name", "arguments": {"arg": "value"}}\n'
+    "</tool_call>"
+)
 
 
-@dataclass
-class DataArguments:
-    """Arguments for data loading."""
-    data_dir: str = field(
-        default="./data/processed",
-        metadata={"help": "Directory with processed datasets"}
-    )
-    dataset_config: str = field(
-        default="configs/dataset_config.yaml",
-        metadata={"help": "Path to dataset config"}
-    )
-    num_samples: int = field(
-        default=0,
-        metadata={"help": "Max samples to use (0 = use all from data_dir)"}
-    )
-    max_seq_length: int = field(
-        default=2048,
-        metadata={"help": "Maximum sequence length"}
-    )
+# -----------------------------------------------------------------------
+# Data loading — convert raw examples to chat conversations
+# -----------------------------------------------------------------------
+
+def load_synthetic_conversations(data_dir: str = "data/raw/synthetic") -> List[List[Dict]]:
+    """Load synthetic JSONL files and convert to chat conversation format."""
+    data_path = Path(data_dir)
+    conversations = []
+
+    jsonl_files = list(data_path.glob("*.jsonl")) + list(data_path.glob("*.json"))
+    for fpath in jsonl_files:
+        with open(fpath) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                example = json.loads(line)
+                conv = _example_to_conversation(example)
+                if conv:
+                    conversations.append(conv)
+
+    logger.info("Loaded %d synthetic conversations from %s", len(conversations), data_dir)
+    return conversations
 
 
-@dataclass
-class LoraArguments:
-    """Arguments for LoRA configuration."""
-    lora_r: int = field(default=64, metadata={"help": "LoRA rank"})
-    lora_alpha: int = field(default=16, metadata={"help": "LoRA alpha"})
-    lora_dropout: float = field(default=0.05, metadata={"help": "LoRA dropout"})
-    target_modules: Optional[str] = field(
-        default="q_proj,v_proj,k_proj,o_proj,gate_proj,up_proj,down_proj",
-        metadata={"help": "Comma-separated target modules"}
-    )
+def _example_to_conversation(example: Dict) -> Optional[List[Dict]]:
+    """Convert a structured synthetic example to a chat conversation."""
+    instruction = example.get("instruction", "")
+    if not instruction:
+        return None
+
+    # Build system prompt with available tools
+    tools = example.get("tools", [])
+    if tools:
+        tools_json = json.dumps(tools, indent=2)
+        system_content = (
+            f"{TOOL_USE_SYSTEM_PROMPT}\n\n"
+            f"Available tools:\n{tools_json}"
+        )
+    else:
+        system_content = TOOL_USE_SYSTEM_PROMPT
+
+    # Build assistant response from tool_calls
+    tool_calls = example.get("tool_calls", [])
+    if tool_calls:
+        parts = []
+        for tc in tool_calls:
+            parts.append(
+                "<tool_call>\n"
+                + json.dumps(tc, indent=2)
+                + "\n</tool_call>"
+            )
+        assistant_content = "\n".join(parts)
+    else:
+        # Fallback: extract from text field
+        text = example.get("text", "")
+        assistant_idx = text.find("ASSISTANT:")
+        if assistant_idx >= 0:
+            assistant_content = text[assistant_idx + len("ASSISTANT:"):].strip()
+        else:
+            return None
+
+    return [
+        {"role": "system", "content": system_content},
+        {"role": "user", "content": instruction},
+        {"role": "assistant", "content": assistant_content},
+    ]
 
 
-def setup_logging(output_dir: str):
-    """Setup logging configuration."""
+def load_text_data_as_conversations(
+    dataset_config: str = "configs/dataset_config.yaml",
+) -> List[List[Dict]]:
+    """Load HF/other datasets via data_loader, normalize to text,
+    and wrap as single-turn conversations for SFT."""
+    try:
+        loader = ToolUseDataLoader(dataset_config)
+        dataset = loader.load_all_datasets()
+        dataset = loader._normalize_to_text(dataset)
+        dataset = loader.preprocess(dataset)
+    except Exception as e:
+        logger.warning("Failed to load HF datasets: %s", e)
+        return []
+
+    conversations = []
+    for example in dataset:
+        text = example.get("text", "")
+        if not text:
+            continue
+        # Wrap as a single-message conversation (train on full text)
+        conversations.append([
+            {"role": "system", "content": TOOL_USE_SYSTEM_PROMPT},
+            {"role": "user", "content": text},
+        ])
+
+    logger.info("Loaded %d text-based conversations from HF datasets", len(conversations))
+    return conversations
+
+
+# -----------------------------------------------------------------------
+# Training
+# -----------------------------------------------------------------------
+
+async def train_sft(args):
+    """Run SFT training on Tinker."""
+
+    # ---- Logging ----
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-        datefmt="%m/%d/%Y %H:%M:%S",
         level=logging.INFO,
     )
+    os.makedirs(args.output_dir, exist_ok=True)
 
-    # Log to file
-    os.makedirs(output_dir, exist_ok=True)
-    file_handler = logging.FileHandler(
-        os.path.join(output_dir, "training.log")
+    # ---- W&B ----
+    wandb.init(
+        project=args.wandb_project,
+        name=args.wandb_run_name or f"sft-{args.base_model.split('/')[-1]}",
+        tags=["sft", "stage1", "tool-use"],
+        config={
+            "stage": "sft",
+            "base_model": args.base_model,
+            "lora_rank": args.lora_rank,
+            "learning_rate": args.learning_rate,
+            "batch_size": args.batch_size,
+            "num_epochs": args.num_epochs,
+            "max_seq_length": args.max_seq_length,
+            "seed": args.seed,
+            "include_hf_data": args.include_hf_data,
+        },
+        mode="disabled" if not os.getenv("WANDB_API_KEY") else "online",
     )
-    file_handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+
+    # ---- Load conversations ----
+    logger.info("Loading training data...")
+    conversations = load_synthetic_conversations(args.synthetic_data_dir)
+    if args.include_hf_data:
+        conversations += load_text_data_as_conversations(args.dataset_config)
+
+    if not conversations:
+        raise RuntimeError("No training data found. Run scripts/generate_synthetic.py first.")
+
+    random.seed(args.seed)
+    random.shuffle(conversations)
+
+    # Split off validation set
+    n_val = max(1, int(len(conversations) * 0.1))
+    val_conversations = conversations[:n_val]
+    train_conversations = conversations[n_val:]
+    logger.info("Train: %d, Validation: %d conversations", len(train_conversations), len(val_conversations))
+
+    # ---- Connect to Tinker ----
+    logger.info("Connecting to Tinker service...")
+    service_client = tinker.ServiceClient()
+
+    logger.info("Creating LoRA training client (base=%s, rank=%d)...", args.base_model, args.lora_rank)
+    training_client = await service_client.create_lora_training_client_async(
+        base_model=args.base_model,
+        rank=args.lora_rank,
+    )
+    tokenizer = training_client.get_tokenizer()
+
+    # ---- Renderer ----
+    try:
+        renderer_name = get_recommended_renderer_name(args.base_model)
+    except Exception:
+        renderer_name = args.renderer_name
+    renderer = get_renderer(renderer_name, tokenizer)
+    logger.info("Using renderer: %s", renderer_name)
+
+    # ---- Convert to Datums ----
+    logger.info("Converting conversations to Datum objects...")
+    train_datums = _conversations_to_datums(
+        train_conversations, renderer, args.max_seq_length
+    )
+    val_datums = _conversations_to_datums(
+        val_conversations, renderer, args.max_seq_length
+    )
+    logger.info("Train datums: %d, Val datums: %d", len(train_datums), len(val_datums))
+
+    if not train_datums:
+        raise RuntimeError("No valid training datums after conversion. Check data format.")
+
+    # ---- Training loop ----
+    adam_params = tinker.AdamParams(
+        learning_rate=args.learning_rate,
+        beta1=0.9,
+        beta2=0.95,
+    )
+
+    n_epochs = args.num_epochs
+    batch_size = args.batch_size
+    total_steps = (len(train_datums) * n_epochs) // batch_size
+    log_every = args.logging_steps
+    save_every = args.save_steps
+    wandb.config.update({
+        "n_train_conversations": len(train_conversations),
+        "n_val_conversations": len(val_conversations),
+        "n_train_datums": len(train_datums),
+        "n_val_datums": len(val_datums),
+        "total_steps_planned": total_steps,
+    })
+
+    logger.info("=" * 60)
+    logger.info("Tinker SFT Training — Stage 1")
+    logger.info("=" * 60)
+    logger.info("  Base model      : %s", args.base_model)
+    logger.info("  LoRA rank       : %d", args.lora_rank)
+    logger.info("  Learning rate   : %s", args.learning_rate)
+    logger.info("  Batch size      : %d", batch_size)
+    logger.info("  Epochs          : %d", n_epochs)
+    logger.info("  Total steps     : %d", total_steps)
+    logger.info("  Max seq length  : %d", args.max_seq_length)
+
+    global_step = 0
+    for epoch in range(n_epochs):
+        random.shuffle(train_datums)
+
+        for batch_start in range(0, len(train_datums), batch_size):
+            batch = train_datums[batch_start : batch_start + batch_size]
+            if not batch:
+                continue
+
+            # Forward + backward
+            fwd_bwd_future = await training_client.forward_backward_async(
+                batch, loss_fn="cross_entropy"
+            )
+            optim_future = await training_client.optim_step_async(adam_params)
+
+            fwd_bwd_result = await fwd_bwd_future.result_async()
+            await optim_future.result_async()
+
+            global_step += 1
+
+            if global_step % log_every == 0:
+                loss_val = fwd_bwd_result.loss if hasattr(fwd_bwd_result, "loss") else None
+                logger.info(
+                    "Step %d/%d (epoch %d) | loss: %s",
+                    global_step, total_steps, epoch + 1,
+                    f"{loss_val:.4f}" if loss_val is not None else "N/A",
+                )
+                log_dict = {
+                    "train/epoch": epoch + 1,
+                    "train/epoch_progress": (batch_start + batch_size) / max(len(train_datums), 1),
+                    "train/samples_seen": global_step * batch_size,
+                }
+                if loss_val is not None:
+                    log_dict["train/loss"] = float(loss_val)
+                wandb.log(log_dict, step=global_step)
+
+            if save_every > 0 and global_step % save_every == 0:
+                logger.info("Saving checkpoint at step %d...", global_step)
+                await save_checkpoint(
+                    training_client,
+                    step=global_step,
+                    output_dir=args.output_dir,
+                )
+
+    # ---- Final save ----
+    logger.info("Saving final weights to %s...", args.output_dir)
+    await save_checkpoint(
+        training_client,
+        step=global_step,
+        output_dir=args.output_dir,
+    )
+    logger.info("SFT training complete! %d steps across %d epochs.", global_step, n_epochs)
+
+    # ---- Push to Hugging Face Hub ----
+    if args.hf_repo_id:
+        await _push_to_hub_async(
+            repo_id=args.hf_repo_id,
+            checkpoint_dir=args.output_dir,
+            base_model=args.base_model,
+            training_config={
+                "stage": "sft",
+                "base_model": args.base_model,
+                "lora_rank": args.lora_rank,
+                "learning_rate": args.learning_rate,
+                "batch_size": args.batch_size,
+                "num_epochs": args.num_epochs,
+                "max_seq_length": args.max_seq_length,
+                "total_steps": global_step,
+            },
         )
-    )
-    logger.addHandler(file_handler)
+    elif os.getenv("HF_TOKEN"):
+        logger.info("HF_TOKEN is set but --hf-repo-id not provided. Skipping Hub upload.")
+
+    wandb.finish()
 
 
-def load_model_and_tokenizer(model_args: ModelArguments):
-    """Load base model and tokenizer."""
+async def _push_to_hub_async(
+    repo_id: str,
+    checkpoint_dir: str,
+    base_model: str,
+    training_config: Dict,
+) -> None:
+    """Push trained adapter to Hugging Face Hub.
 
-    # Setup quantization config
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=model_args.load_in_4bit,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_use_double_quant=True,
-    )
+    Args:
+        repo_id: HF repo ID (e.g., "username/qwen3-sft-tool-use")
+        checkpoint_dir: Local path to saved adapter
+        base_model: Base model ID for documentation
+        training_config: Dict with training hyperparameters
+    """
+    try:
+        hf_token = os.getenv("HF_TOKEN")
+        if not hf_token:
+            logger.warning("HF_TOKEN not set. Skipping Hub upload.")
+            return
 
-    logger.info(f"Loading model: {model_args.model_name_or_path}")
+        logger.info("Pushing adapter to Hugging Face Hub: %s", repo_id)
+        api = HfApi(token=hf_token)
 
-    # In distributed mode (torchrun), pin each process to its local GPU.
-    # Otherwise fall back to "auto" for single-GPU / CPU offload.
-    local_rank = int(os.environ.get("LOCAL_RANK", -1))
-    if local_rank >= 0:
-        device_map = {"":  local_rank}
-    else:
-        device_map = "auto"
+        # Create repo if it doesn't exist
+        try:
+            api.repo_info(repo_id=repo_id, repo_type="model")
+            logger.info("Repo %s already exists", repo_id)
+        except Exception:
+            logger.info("Creating new repo: %s", repo_id)
+            create_repo(repo_id=repo_id, repo_type="model", private=False, exist_ok=True)
 
-    # Load model
-    model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path,
-        quantization_config=bnb_config,
-        device_map=device_map,
-        trust_remote_code=True,
-        torch_dtype=torch.bfloat16,
-    )
+        # Create README
+        readme_content = f"""---
+license: mit
+library_name: peft
+---
 
-    # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path,
-        trust_remote_code=True,
-        padding_side="left",
-    )
+# {repo_id}
 
-    # Add padding token if not present
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+LoRA adapter for Qwen3-8B tool-use fine-tuning.
 
-    logger.info(f"Model loaded: {model.config.model_type}")
-    logger.info(f"Model size: {model.num_parameters() / 1e9:.2f}B parameters")
+## Model Details
 
-    return model, tokenizer
+- **Base Model**: {base_model}
+- **Training Stage**: SFT (Supervised Fine-Tuning)
+- **Task**: Tool-use instruction following
+- **LoRA Rank**: {training_config.get('lora_rank', 'N/A')}
+- **Training Steps**: {training_config.get('total_steps', 'N/A')}
 
+## Training Configuration
 
-def setup_lora(model, lora_args: LoraArguments):
-    """Setup LoRA adaptation."""
+```json
+{json.dumps(training_config, indent=2)}
+```
 
-    # Prepare model for kbit training
-    model = prepare_model_for_kbit_training(model)
+## How to Use
 
-    # LoRA config
-    target_modules = lora_args.target_modules.split(",")
+```python
+from peft import PeftModel
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    lora_config = LoraConfig(
-        r=lora_args.lora_r,
-        lora_alpha=lora_args.lora_alpha,
-        lora_dropout=lora_args.lora_dropout,
-        target_modules=target_modules,
-        bias="none",
-        task_type="CAUSAL_LM",
-    )
+base_model_id = "{base_model}"
+model = AutoModelForCausalLM.from_pretrained(base_model_id, load_in_4bit=True)
+model = PeftModel.from_pretrained(model, "{repo_id}")
+tokenizer = AutoTokenizer.from_pretrained(base_model_id)
+```
 
-    # Apply LoRA
-    model = get_peft_model(model, lora_config)
+## License
 
-    # Print trainable parameters
-    model.print_trainable_parameters()
+MIT
+"""
+        # Write README to checkpoint dir
+        readme_path = Path(checkpoint_dir) / "README.md"
+        with open(readme_path, "w") as f:
+            f.write(readme_content)
+        logger.info("Created README at %s", readme_path)
 
-    return model
+        # Upload checkpoint directory
+        logger.info("Uploading checkpoint directory...")
+        upload_folder(
+            repo_id=repo_id,
+            folder_path=checkpoint_dir,
+            token=hf_token,
+            commit_message="Upload SFT adapter weights",
+        )
+        logger.info("✓ Successfully pushed to %s", repo_id)
+        hub_url = f"https://huggingface.co/{repo_id}"
+        logger.info("View at: %s", hub_url)
 
+        # Log to W&B
+        wandb.log({"hf_hub_url": hub_url})
+        wandb.config.update({"hf_repo_id": repo_id})
 
-def load_and_preprocess_data(
-    data_args: DataArguments,
-    tokenizer,
-) -> DatasetDict:
-    """Load and preprocess datasets."""
-
-    logger.info("Loading datasets...")
-
-    data_loader = ToolUseDataLoader(data_args.dataset_config)
-    datasets = data_loader.prepare_datasets(
-        tokenizer,
-        max_length=data_args.max_seq_length
-    )
-
-    logger.info(f"Train: {len(datasets['train'])} examples")
-    logger.info(f"Validation: {len(datasets['validation'])} examples")
-    logger.info(f"Test: {len(datasets['test'])} examples")
-
-    return datasets
+    except Exception as e:
+        logger.error("Failed to push to Hub: %s", e)
 
 
-def train(
-    model_args: ModelArguments,
-    data_args: DataArguments,
-    lora_args: LoraArguments,
-    training_args: TrainingArguments,
-):
-    """Main training function."""
+def _conversations_to_datums(
+    conversations: List[List[Dict]],
+    renderer,
+    max_length: int,
+) -> List[tinker.Datum]:
+    """Convert chat conversations to Tinker Datum objects."""
+    datums = []
+    for conv in conversations:
+        try:
+            # Only train on the last assistant message (the tool call)
+            # For user-only conversations, train on the full content
+            has_assistant = any(m.get("role") == "assistant" for m in conv)
+            train_on = (
+                TrainOnWhat.LAST_ASSISTANT_MESSAGE
+                if has_assistant
+                else TrainOnWhat.ALL
+            )
+            datum = conversation_to_datum(
+                conv, renderer, max_length=max_length, train_on_what=train_on,
+            )
+            datums.append(datum)
+        except Exception as e:
+            logger.debug("Skipping conversation: %s", e)
+            continue
+    return datums
 
-    setup_logging(training_args.output_dir)
 
-    # Load model and tokenizer
-    model, tokenizer = load_model_and_tokenizer(model_args)
-
-    # Setup LoRA
-    model = setup_lora(model, lora_args)
-
-    # Load data
-    datasets = load_and_preprocess_data(data_args, tokenizer)
-
-    # Data collator
-    data_collator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer,
-        mlm=False,
-        pad_to_multiple_of=8,
-    )
-
-    # Callbacks
-    callbacks = [EarlyStoppingCallback(early_stopping_patience=3)]
-
-    # Trainer
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=datasets["train"],
-        eval_dataset=datasets["validation"],
-        data_collator=data_collator,
-        tokenizer=tokenizer,
-        callbacks=callbacks,
-    )
-
-    # Resume from checkpoint if available
-    checkpoint = None
-    if training_args.resume_from_checkpoint:
-        checkpoint = training_args.resume_from_checkpoint
-    elif os.path.isdir(training_args.output_dir):
-        checkpoints = [
-            os.path.join(training_args.output_dir, d)
-            for d in os.listdir(training_args.output_dir)
-            if d.startswith("checkpoint-")
-        ]
-        if checkpoints:
-            checkpoint = max(checkpoints, key=os.path.getmtime)
-            logger.info(f"Resuming from checkpoint: {checkpoint}")
-
-    # Train
-    logger.info("Starting training...")
-    train_result = trainer.train(resume_from_checkpoint=checkpoint)
-
-    # Save results
-    metrics = train_result.metrics
-    metrics["train_samples"] = len(datasets["train"])
-
-    trainer.log_metrics("train", metrics)
-    trainer.save_metrics("train", metrics, combined=False)
-
-    # Save model
-    logger.info(f"Saving model to {training_args.output_dir}...")
-    trainer.save_model(training_args.output_dir)
-    tokenizer.save_pretrained(training_args.output_dir)
-
-    # Evaluate
-    logger.info("Running evaluation...")
-    eval_metrics = trainer.evaluate()
-    trainer.log_metrics("eval", eval_metrics)
-    trainer.save_metrics("eval", eval_metrics, combined=False)
-
-    return train_result
-
+# -----------------------------------------------------------------------
+# CLI
+# -----------------------------------------------------------------------
 
 def main():
-    """Main entry point."""
+    p = argparse.ArgumentParser(description="Tinker SFT training for tool-use")
+    p.add_argument("--base-model", default="Qwen/Qwen3-8B")
+    p.add_argument("--renderer-name", default="qwen3",
+                   help="Fallback renderer name if auto-detect fails")
+    p.add_argument("--synthetic-data-dir", default="./data/raw/synthetic")
+    p.add_argument("--dataset-config", default="configs/dataset_config.yaml")
+    p.add_argument("--include-hf-data", action="store_true", default=False,
+                   help="Also load HF datasets (APIBench, ToolBench, etc.)")
+    p.add_argument("--output-dir", default="./outputs/sft")
+    p.add_argument("--lora-rank", type=int, default=64)
+    p.add_argument("--learning-rate", type=float, default=2e-4)
+    p.add_argument("--batch-size", type=int, default=8)
+    p.add_argument("--num-epochs", type=int, default=3)
+    p.add_argument("--max-seq-length", type=int, default=2048)
+    p.add_argument("--logging-steps", type=int, default=10)
+    p.add_argument("--save-steps", type=int, default=100)
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--wandb-project", default="qwen3-8b-tool-use",
+                   help="W&B project name (requires WANDB_API_KEY env var)")
+    p.add_argument("--wandb-run-name", default=None,
+                   help="W&B run name (auto-generated if not set)")
+    p.add_argument("--hf-repo-id", default=None,
+                   help="HF repo ID to push to (e.g., username/qwen3-sft-tool-use). Requires HF_TOKEN env var.")
+    a = p.parse_args()
 
-    parser = HfArgumentParser(
-        (ModelArguments, DataArguments, LoraArguments, TrainingArguments)
-    )
+    # Convert argparse namespace
+    class _Args:
+        pass
 
-    (model_args, data_args, lora_args, training_args) = parser.parse_args_into_dataclasses()
+    args = _Args()
+    for k, v in vars(a).items():
+        setattr(args, k.replace("-", "_"), v)
 
-    # Train
-    train(model_args, data_args, lora_args, training_args)
+    asyncio.run(train_sft(args))
 
 
 if __name__ == "__main__":

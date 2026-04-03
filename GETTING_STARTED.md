@@ -74,7 +74,7 @@ python -c "import transformers, peft, trl, bitsandbytes, datasets; print('All im
 python -c "import sys; sys.path.insert(0,'src'); from data_loader import ToolUseDataLoader; from rewards import tool_name_reward; print('Project modules OK')"
 
 # 4. Model access (downloads tokenizer, ~1 min)
-python -c "from transformers import AutoTokenizer; t = AutoTokenizer.from_pretrained('Qwen/Qwen3-8B', trust_remote_code=True); print(f'Vocab size: {t.vocab_size}')"
+python -c "from transformers import AutoTokenizer; t = AutoTokenizer.from_pretrained('Qwen/Qwen3-8B'); print(f'Vocab size: {t.vocab_size}')"
 ```
 
 **Expected output** (all must pass):
@@ -362,7 +362,7 @@ bash scripts/run_pipeline.sh compare    # Comparison only
 | Loss is NaN | Reduce `--learning-rate` by 2× |
 | SFT adapter not found at GRPO stage | Ensure `--sft-adapter-path ./outputs/sft` points to correct dir |
 | W&B not logging | Run `wandb login` and set `--report-to wandb` |
-| Tokenizer trust_remote_code error | Ensure `transformers>=4.42.3` |
+| Tokenizer load error | Ensure `transformers` is up to date and model name is correct |
 
 See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for the full guide.
 

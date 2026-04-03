@@ -193,8 +193,7 @@ bnb_config = BitsAndBytesConfig(
 model = AutoModelForCausalLM.from_pretrained(
     "Qwen/Qwen3-8B",
     quantization_config=bnb_config,
-    device_map="auto",
-    trust_remote_code=True
+  device_map="auto"
 )
 
 # LoRA config

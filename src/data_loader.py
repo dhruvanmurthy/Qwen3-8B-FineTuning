@@ -91,7 +91,6 @@ class ToolUseDataLoader:
 
         kwargs = dict(
             cache_dir=self.cache_dir,
-            trust_remote_code=True,
             token=hf_token,
         )
         if data_files:
@@ -193,9 +192,22 @@ class ToolUseDataLoader:
             data = [data[i] for i in indices]
 
         logger.info(f"Loaded {len(data)} examples from {path}")
-        return Dataset.from_dict({
-            "text": [json.dumps(d) for d in data]
-        })
+
+        # Build column-oriented dict preserving all structured fields
+        all_keys = set()
+        for d in data:
+            all_keys.update(d.keys())
+
+        columns = {key: [] for key in sorted(all_keys)}
+        for d in data:
+            for key in columns:
+                val = d.get(key)
+                # Serialize complex types to strings to avoid Arrow type conflicts
+                if isinstance(val, (dict, list)):
+                    val = json.dumps(val)
+                columns[key].append(val if val is not None else "")
+
+        return Dataset.from_dict(columns)
 
     def preprocess(self, dataset: Dataset) -> Dataset:
         """Apply preprocessing operations."""
