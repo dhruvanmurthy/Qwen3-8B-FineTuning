@@ -8,20 +8,20 @@ Step-by-step guide to run and verify the full **Baseline → SFT → GRPO** pipe
 
 | Requirement | Minimum | Recommended |
 |---|---|---|
-| **GPU** | 1 × 24 GB (RTX 3090 / A10) | 1 × 16 GB (T4) |
-| **RAM** | 32 GB | 64 GB |
+| **Tinker API Key** | Required | Required |
+| **RAM** | 16 GB | 32 GB |
 | **Disk** | 50 GB free | 100 GB free |
 | **Python** | 3.10 | 3.11 |
-| **CUDA** | 11.8 | 12.1 |
 | **OS** | Windows 10 / Linux | Linux (Ubuntu 22.04) |
+
+> **Note**: No local GPU is required. Training and inference run on Tinker’s remote GPUs.
+> A local GPU is only needed if you want to run local inference after training.
 
 ## Step 1 — Clone & Create Environment
 
 ```bash
-cd d:\MTech\Qwen3-8B-FineTuning
-git init
-git add .
-git commit -m "Initial commit: project scaffolding"
+git clone https://github.com/dhruvanmurthy/Qwen3-8B-FineTuning.git
+cd Qwen3-8B-FineTuning
 ```
 
 ### Windows (PowerShell)
@@ -51,6 +51,7 @@ Edit `.env`:
 HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxxx
 WANDB_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxx
 WANDB_PROJECT=qwen3-8b-tool-use
+TINKER_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
 Login to both services:
@@ -64,11 +65,11 @@ wandb login
 Run each check. All should print OK / True:
 
 ```bash
-# 1. CUDA available
+# 1. CUDA available (optional — local GPU not required for training)
 python -c "import torch; print('CUDA:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A')"
 
 # 2. Core packages
-python -c "import transformers, peft, trl, bitsandbytes, datasets; print('All imports OK')"
+python -c "import transformers, datasets, tinker; print('All imports OK')"
 
 # 3. Project modules
 python -c "import sys; sys.path.insert(0,'src'); from data_loader import ToolUseDataLoader; from rewards import tool_name_reward; print('Project modules OK')"
@@ -79,8 +80,7 @@ python -c "from transformers import AutoTokenizer; t = AutoTokenizer.from_pretra
 
 **Expected output** (all must pass):
 ```
-CUDA: True
-GPU: NVIDIA Tesla T4
+CUDA: True  (or False — local GPU is optional)
 All imports OK
 Project modules OK
 Vocab size: 151936
@@ -109,7 +109,8 @@ print(f'Columns:    {ds[\"train\"].column_names}')
 
 ## Step 5 — Stage 0: Baseline Evaluation
 
-Evaluate the base Qwen3-8B model **before any training** to establish the baseline:
+Evaluate the base Qwen3-8B model **before any training** to establish the baseline.
+Inference runs on Tinker’s remote GPUs (requires `TINKER_API_KEY`).
 
 ```bash
 python src/evaluate.py \
@@ -121,45 +122,32 @@ python src/evaluate.py \
 ### Verify
 
 ```bash
-python -c "import json; r=json.load(open('outputs/eval_baseline.json')); print(json.dumps(r['baseline'], indent=2))"
+python -m json.tool outputs/eval_baseline.json
 ```
 
 **Expected**: Tool selection accuracy ~40-60%, argument accuracy ~20-30%, multi-step ~15-25%. This is the number to beat.
 
 ## Step 6 — Stage 1: SFT Training
 
-### Quick smoke test (5 min, 500 samples, 1 epoch)
+Training runs on Tinker’s remote GPUs. No local GPU required.
+
+### Quick smoke test (dry-run, no Tinker cost)
 
 ```bash
 python src/train.py \
-    --model_name_or_path Qwen/Qwen3-8B \
-    --data_dir ./data/processed \
-    --output_dir ./outputs/sft_test \
-    --num_train_epochs 1 \
-    --per_device_train_batch_size 4 \
-    --gradient_accumulation_steps 2 \
-    --learning_rate 2e-4 \
-    --eval_strategy steps \
-    --eval_steps 50 \
-    --save_steps 50 \
-    --save_total_limit 1 \
-    --bf16 \
-    --gradient_checkpointing \
-    --logging_steps 5 \
-    --report_to none \
-    --seed 42
+    --base-model sshleifer/tiny-gpt2 \
+    --output-dir ./outputs/sft_test \
+    --dry-run --dry-run-steps 3
 ```
 
 ### Verify smoke test
 
 ```bash
-# Check adapter files exist
 python -c "
-import os
+import os, json
 path = 'outputs/sft_test'
 files = os.listdir(path)
-assert 'adapter_config.json' in files, 'Missing adapter_config.json'
-assert 'adapter_model.safetensors' in files or 'adapter_model.bin' in files, 'Missing adapter weights'
+assert 'dry_run_summary.json' in files, 'Missing dry_run_summary.json'
 print('SFT smoke test: PASSED')
 print('Files:', files)
 "
@@ -168,27 +156,16 @@ print('Files:', files)
 ### Full SFT training
 
 ```bash
+bash scripts/run_local_training.sh
+# Or configure directly:
 python src/train.py \
-    --model_name_or_path Qwen/Qwen3-8B \
-    --data_dir ./data/processed \
-    --output_dir ./outputs/sft \
-    --num_train_epochs 3 \
-    --per_device_train_batch_size 16 \
-    --gradient_accumulation_steps 2 \
-    --learning_rate 2e-4 \
-    --warmup_ratio 0.1 \
-    --weight_decay 0.01 \
-    --eval_strategy steps \
-    --eval_steps 250 \
-    --save_strategy steps \
-    --save_steps 250 \
-    --save_total_limit 3 \
-    --load_best_model_at_end \
-    --bf16 \
-    --gradient_checkpointing \
-    --logging_steps 10 \
-    --report_to wandb \
-    --seed 42
+    --base-model Qwen/Qwen3-8B \
+    --output-dir ./outputs/sft \
+    --lora-rank 64 \
+    --learning-rate 2e-4 \
+    --batch-size 8 \
+    --num-epochs 3 \
+    --max-seq-length 2048
 ```
 
 ### SFT evaluation
@@ -197,44 +174,30 @@ python src/train.py \
 python src/evaluate.py \
     --mode sft \
     --base-model Qwen/Qwen3-8B \
-    --sft-adapter ./outputs/sft \
+    --sft-output-dir ./outputs/sft \
     --output outputs/eval_sft.json
 ```
 
 ### Verify
 
 ```bash
-python -c "
-import json
-r = json.load(open('outputs/eval_sft.json'))
-sft = r['sft']
-print('SFT Results:')
-for k,v in sft.items():
-    if 'accuracy' in k or 'success' in k or 'compliance' in k:
-        print(f'  {k}: {100*v:.1f}%')
-    else:
-        print(f'  {k}: {v:.2f}')
-"
+python -m json.tool outputs/eval_sft.json
 ```
 
 **Expected**: Tool selection 70-85%, argument accuracy 55-70%, multi-step 50-65% — a clear jump from baseline.
 
 ## Step 7 — Stage 2: GRPO Training
 
-This stage applies Group Relative Policy Optimization on top of the SFT checkpoint, using binary verifiable rewards.
+This stage applies Group Relative Policy Optimization on top of the SFT checkpoint, using binary verifiable rewards. Training runs on Tinker’s remote GPUs.
 
-### Quick smoke test (2 min, 5 steps)
+### Quick smoke test (dry-run, no Tinker cost)
 
 ```bash
 python src/train_grpo.py \
-    --sft-adapter-path ./outputs/sft \
-    --base-model-name Qwen/Qwen3-8B \
+    --base-model sshleifer/tiny-gpt2 \
+    --sft-checkpoint ./outputs/sft \
     --output-dir ./outputs/grpo_test \
-    --max-steps 5 \
-    --per-device-train-batch-size 2 \
-    --gradient-accumulation-steps 2 \
-    --num-generations 4 \
-    --report-to none
+    --dry-run --dry-run-steps 3
 ```
 
 ### Verify smoke test
@@ -244,7 +207,7 @@ python -c "
 import os
 path = 'outputs/grpo_test'
 files = os.listdir(path)
-assert 'adapter_config.json' in files, 'Missing adapter_config.json'
+assert 'dry_run_summary.json' in files, 'Missing dry_run_summary.json'
 print('GRPO smoke test: PASSED')
 print('Files:', files)
 "
@@ -254,19 +217,15 @@ print('Files:', files)
 
 ```bash
 python src/train_grpo.py \
-    --sft-adapter-path ./outputs/sft \
-    --base-model-name Qwen/Qwen3-8B \
+    --base-model Qwen/Qwen3-8B \
+    --sft-checkpoint ./outputs/sft \
     --output-dir ./outputs/grpo \
-    --lora-r 32 \
-    --learning-rate 3e-5 \
+    --lora-rank 32 \
+    --learning-rate 4e-5 \
     --max-steps 50 \
-    --per-device-train-batch-size 4 \
-    --gradient-accumulation-steps 32 \
-    --num-generations 16 \
-    --report-to wandb
+    --batch-size 16 \
+    --group-size 8
 ```
-
-> **Note**: Effective batch = 4 × 32 = 128. On an A10 (24 GB), reduce `--per-device-train-batch-size 2` and `--gradient-accumulation-steps 64`.
 
 ### GRPO evaluation
 
@@ -274,8 +233,8 @@ python src/train_grpo.py \
 python src/evaluate.py \
     --mode grpo \
     --base-model Qwen/Qwen3-8B \
-    --sft-adapter ./outputs/sft \
-    --grpo-adapter ./outputs/grpo \
+    --sft-output-dir ./outputs/sft \
+    --grpo-output-dir ./outputs/grpo \
     --output outputs/eval_grpo.json
 ```
 
@@ -285,8 +244,8 @@ python src/evaluate.py \
 python src/evaluate.py \
     --mode all \
     --base-model Qwen/Qwen3-8B \
-    --sft-adapter ./outputs/sft \
-    --grpo-adapter ./outputs/grpo \
+    --sft-output-dir ./outputs/sft \
+    --grpo-output-dir ./outputs/grpo \
     --output outputs/eval_comparison.json
 ```
 
@@ -357,12 +316,13 @@ bash scripts/run_pipeline.sh compare    # Comparison only
 
 | Symptom | Fix |
 |---|---|
-| `CUDA out of memory` | Reduce `--per-device-train-batch-size`, increase `--gradient-accumulation-steps` |
-| GRPO OOM on generations | Reduce `--num-generations 8` and `--max-completion-length 256` |
+| `CUDA out of memory` | Not applicable for Tinker training — GPU runs remotely |
+| GRPO OOM on generations | Reduce `--group-size 4` and `--max-completion-length 256` |
 | Loss is NaN | Reduce `--learning-rate` by 2× |
-| SFT adapter not found at GRPO stage | Ensure `--sft-adapter-path ./outputs/sft` points to correct dir |
+| SFT checkpoint not found at GRPO stage | Ensure `--sft-checkpoint ./outputs/sft` points to correct dir |
 | W&B not logging | Run `wandb login` and set `--report-to wandb` |
 | Tokenizer load error | Ensure `transformers` is up to date and model name is correct |
+| Tinker connection error | Verify `TINKER_API_KEY` is set and valid |
 
 See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for the full guide.
 
@@ -389,15 +349,13 @@ Before submitting to production:
 1. ✅ Train → Val loss monotonically decreases
 2. ✅ Final eval_loss < 1.5
 3. ✅ Tool selection accuracy > 85%
-4. ✅ Training time < 24h
-5. ✅ Total cost < $150
-6. ✅ Model pushes to HF Hub
-7. ✅ All runs logged to W&B
-8. ✅ Documentation complete
+4. ✅ Training time within expectations
+5. ✅ Model pushes to HF Hub
+6. ✅ All runs logged to W&B
+7. ✅ Documentation complete
 
 ### 🟡 Project Acceptable if:
-- 5-6 of above checkmarks
-- Training time 24-48h
+- 4-5 of above checkmarks
 - Cost $100-150
 
 ### 🔴 Project Needs Work if:

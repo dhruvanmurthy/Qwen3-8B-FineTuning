@@ -1,4 +1,4 @@
-# Model Card: Qwen3-8B Tool Use (QLoRA)
+# Model Card: Qwen3-8B Tool Use (LoRA)
 
 ## Model Details
 
@@ -7,12 +7,12 @@ This is a fine-tuned version of [Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B)
 
 ### Model Specifications
 - **Base Model**: Qwen3-8B (Qwen/Qwen3-8B)
-- **Fine-tuning Method**: QLoRA (4-bit quantization + LoRA)
+- **Fine-tuning Method**: LoRA (Low-Rank Adaptation)
 - **LoRA Rank (r)**: 64
 - **LoRA Alpha (α)**: 16
 - **Target Modules**: q_proj, v_proj, k_proj, o_proj, gate_proj, up_proj, down_proj
 - **Training Data**: ~3,043 train samples (from ~20k raw across APIBench, ToolBench, Gorilla BFCL, Synthetic)
-- **Training Time**: ~20 hours on 1× T4 16GB GPU (STANDARD_NC4AS_T4_V3)
+- **Training Infrastructure**: [Tinker](https://tinker.thinkingmachines.ai/) remote GPUs
 - **Training Date**: March 2026
 
 ## Model Performance
@@ -171,25 +171,20 @@ Format:
 
 ## Environmental Impact
 
-### Training Emissions
-- **GPU Hours**: 20 hours on T4 (40.5 kWh)
-- **CO₂ Emissions**: ~9 kg CO₂eq (assuming US grid average)
-- **Committed to**: Offset via carbon credits 🌱
-
 ### Efficiency
-- **Peak VRAM**: 16GB (vs 80GB+ for full fine-tuning)
+- **Training**: Remote GPU via Tinker (no local GPU waste)
 - **Model Size**: 8B parameters (vs 405B+ for larger models)
-- **Inference Cost**: ~$0.0001 per token (batch processing)
+- **Method**: LoRA adapters (~3.3M trainable params vs 8B full fine-tuning)
 
 ## Citation
 
 ```bibtex
 @misc{murthy2026qwen3tooluse,
   author = {Murthy, Dhruvan},
-  title = {Qwen3-8B Fine-tuned for Tool Use (QLoRA)},
+  title = {Qwen3-8B Fine-tuned for Tool Use (LoRA)},
   year = {2026},
   url = {https://huggingface.co/dhruvanmurthy/qwen3-8b-tool-use-lora},
-  note = {QLoRA fine-tuning for function calling and API orchestration}
+  note = {LoRA fine-tuning for function calling and API orchestration}
 }
 ```
 

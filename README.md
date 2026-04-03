@@ -6,8 +6,8 @@ A cost-efficient, reproducible MLOps project for fine-tuning Qwen3-8B on multi-s
 
 - **Model**: Qwen3-8B (8B parameters, fast inference)
 - **Task**: Multi-step tool use & function calling
-- **Pipeline**: 3-stage — Baseline eval → SFT (QLoRA) → GRPO (RL with binary rewards)
-- **Budget**: Optimized for cost-efficient local/cloud GPU training
+- **Pipeline**: 3-stage — Baseline eval → SFT (LoRA) → GRPO (RL with binary rewards)
+- **Training**: Remote GPU training via [Tinker](https://tinker.thinkingmachines.ai/) — no local GPU required
 - **Reproducibility**: Full tracking via W&B, versioned datasets, seed control
 
 ## Key Metrics
@@ -36,39 +36,38 @@ Qwen3-8B-FineTuning/
 │   ├── TRAINING_PLAN.md              # 3-stage training strategy
 │   ├── DATASET_STRATEGY.md           # Data pipeline & aggregation
 │   ├── EVALUATION.md                 # 3-stage evaluation methodology
-│   ├── BUDGET_OPTIMIZATION.md        # Cost reduction strategies
 │   └── TROUBLESHOOTING.md            # Common issues & fixes
 │
 ├── configs/
-│   ├── training.yaml                 # Stage 1: SFT hyperparameters
-│   ├── grpo_config.yaml              # Stage 2: GRPO recipe
-│   ├── qora_config.yaml              # QLoRA parameters
 │   └── dataset_config.yaml           # Dataset pipeline config
 │
 ├── src/
 │   ├── __init__.py
 │   ├── data_loader.py                # Dataset loading, preprocessing, GRPO prompt prep
-│   ├── train.py                      # Stage 1: SFT training (HF Trainer)
-│   ├── train_grpo.py                 # Stage 2: GRPO training (TRL GRPOTrainer)
+│   ├── train.py                      # Stage 1: SFT training (via Tinker)
+│   ├── train_grpo.py                 # Stage 2: GRPO training (via Tinker)
 │   ├── rewards.py                    # Binary verifiable reward functions
-│   ├── environments.py               # Atropos-pattern coordinator
+│   ├── environments.py               # Reward environment for GRPO
 │   └── evaluate.py                   # 3-stage evaluation (baseline/SFT/GRPO)
 │
 ├── scripts/
 │   ├── run_pipeline.sh               # 3-stage orchestrator (main entry point)
 │   ├── prepare_datasets.sh           # Download & process datasets
-│   ├── run_local_training.sh         # Local training (single + multi-GPU)
+│   ├── run_local_training.sh         # SFT training via Tinker
 │   ├── evaluate_model.sh             # Run evaluation
+│   ├── validate_local.sh             # Local smoke test (dry-run, no GPU cost)
 │   └── generate_synthetic.py         # Synthetic data generation
 │
 ├── data/
 │   ├── raw/                          # Downloaded raw datasets
 │   └── processed/                    # Processed, formatted datasets
 │
-└── .github/
-    └── workflows/
-        ├── test.yml                  # CI/CD testing
-        └── release.yml               # Model release to HF Hub
+├── .github/
+│   └── workflows/
+│       ├── test.yml                  # CI/CD testing
+│       └── release.yml               # Model release to HF Hub
+│
+└── wandb/                            # W&B run logs (gitignored)
 ```
 
 ## Quick Start
@@ -93,14 +92,11 @@ bash scripts/run_pipeline.sh grpo       # Train GRPO (requires SFT output)
 bash scripts/run_pipeline.sh compare    # Side-by-side comparison
 ```
 
-### Multi-GPU Training
+### Validate Locally (No GPU Cost)
 
 ```bash
-# Auto-detect all GPUs:
-bash scripts/run_local_training.sh
-
-# Or explicitly:
-GPUS=4 bash scripts/run_pipeline.sh all
+# Smoke test the pipeline with dry-run mode (tiny model, no Tinker cost)
+bash scripts/validate_local.sh
 ```
 
 ## Documentation
@@ -109,7 +105,6 @@ GPUS=4 bash scripts/run_pipeline.sh all
 - **[docs/TRAINING_PLAN.md](docs/TRAINING_PLAN.md)** — 3-stage training strategy and hyperparameters
 - **[docs/DATASET_STRATEGY.md](docs/DATASET_STRATEGY.md)** — Dataset sourcing, aggregation, GRPO prompt prep
 - **[docs/EVALUATION.md](docs/EVALUATION.md)** — 3-stage evaluation metrics and comparison
-- **[docs/BUDGET_OPTIMIZATION.md](docs/BUDGET_OPTIMIZATION.md)** — Cost reduction strategies
 - **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** — Common errors and solutions (incl. GRPO)
 - **[MODEL_CARD.md](MODEL_CARD.md)** — Model capabilities, limitations, license
 - **[DATASET_CARD.md](DATASET_CARD.md)** — Dataset composition, sources, licenses
@@ -119,29 +114,28 @@ GPUS=4 bash scripts/run_pipeline.sh all
 | Component | Tool | Purpose |
 |-----------|------|---------|
 | **Model** | Qwen3-8B (HF Hub) | Base LLM |
-| **SFT Training** | HuggingFace Transformers + QLoRA | Stage 1: supervised fine-tuning |
-| **GRPO Training** | TRL (GRPOTrainer) | Stage 2: RL with binary rewards |
+| **Training** | [Tinker](https://tinker.thinkingmachines.ai/) | Remote GPU training (SFT + GRPO) |
+| **SFT** | LoRA fine-tuning via Tinker | Stage 1: supervised fine-tuning |
+| **GRPO** | Group Relative Policy Optimization | Stage 2: RL with binary rewards |
 | **Rewards** | Custom binary verifiers | Tool-use correctness signals |
-| **Coordinator** | Atropos pattern (in-process) | Environment ↔ trainer bridge |
-| **Compute** | Local / Cloud GPU (multi-GPU via torchrun) | Distributed training |
 | **Tracking** | Weights & Biases | Experiment logging |
-| **Versioning** | Git + DVC | Code & data version control |
+| **Versioning** | Git | Code version control |
 | **Models** | Hugging Face Hub | Model distribution |
 
 ## Estimated Training Time
 
-| Stage | Method | Time (1× GPU) | Time (4× GPU) |
-|-------|--------|---------------|----------------|
-| Baseline | Eval only | ~30 min | ~30 min |
-| SFT | QLoRA + Trainer | ~18h | ~5h |
-| GRPO | QLoRA + GRPOTrainer | ~4h | ~1.5h |
+| Stage | Method | Approx. Time |
+|-------|--------|--------------|
+| Baseline | Eval only (Tinker inference) | ~30 min |
+| SFT | LoRA via Tinker | ~6-18h |
+| GRPO | LoRA + GRPO via Tinker | ~1-4h |
 
 ## Security & Reproducibility
 
 - **Secrets**: `.env` (git-ignored)
 - **Seeds**: Fixed global seed (42) for all stages
 - **Deps**: Pinned versions in `requirements.txt`
-- **Data**: Versioned datasets on HF Hub, DVC for local tracking
+- **Data**: Versioned datasets on HF Hub
 - **Tracking**: W&B artifacts with reproducible runs
 
 ## Experiment Tracking
@@ -159,12 +153,8 @@ Tracks learning curves, loss metrics, reward signals (GRPO), evaluation tables, 
 # 1. Create feature branch
 git checkout -b feature/my-improvement
 
-# 2. Make changes, test locally with a quick smoke test
-python src/train.py \
-  --model_name_or_path Qwen/Qwen3-8B \
-  --data_dir data/processed \
-  --output_dir outputs/test \
-  --max_steps 20
+# 2. Make changes, validate locally (no Tinker cost)
+bash scripts/validate_local.sh
 
 # 3. Commit and push
 git add .
@@ -201,10 +191,10 @@ tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B")
 
 See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for solutions to:
 - GPU memory overflow (SFT and GRPO)
-- Multi-GPU / DDP issues
 - GRPO rewards stuck at zero
 - TRL version compatibility
 - Training instability
+- Tinker connection issues
 
 ## License
 

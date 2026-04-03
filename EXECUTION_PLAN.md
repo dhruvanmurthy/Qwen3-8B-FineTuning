@@ -36,8 +36,8 @@ cp .env.example .env
 ```bash
 python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
 python -c "from transformers import AutoTokenizer; print('Transformers OK')"
-python -c "from peft import LoraConfig; print('PEFT OK')"
-python -c "from trl import GRPOConfig; print('TRL OK')"
+python -c "import tinker; print('Tinker OK')"
+python -c "from src.rewards import tool_name_reward; print('Project modules OK')"
 ```
 
 ## Phase 2: W&B Setup (10 min)
@@ -72,6 +72,7 @@ Expected: ~3,043 train / ~380 val / ~381 test, columns: `input_ids`, `attention_
 ## Phase 4: Baseline Evaluation (15-30 min)
 
 Evaluate the unmodified base model to establish a performance floor.
+Requires `TINKER_API_KEY` — inference runs on Tinker’s remote GPUs.
 
 ```bash
 bash scripts/run_pipeline.sh baseline
@@ -79,35 +80,32 @@ bash scripts/run_pipeline.sh baseline
 python src/evaluate.py \
   --base-model Qwen/Qwen3-8B \
   --mode baseline \
-  --output-dir outputs/eval_baseline
+  --output outputs/eval_baseline.json
 ```
 
 ### Verify
 ```bash
-cat outputs/eval_baseline/baseline_results.json | python -m json.tool
+python -m json.tool outputs/eval_baseline.json
 # Expect tool_selection ~65%, argument_accuracy ~50%, multi_step ~40%
 ```
 
-## Phase 5: SFT Training (6-8 hours on T4)
+## Phase 5: SFT Training
 
-Supervised fine-tuning with QLoRA (rank 64, LR 2e-4, 3 epochs).
+Supervised fine-tuning with LoRA (rank 64, LR 2e-4, 3 epochs).
+Training runs on Tinker’s remote GPUs — no local GPU required.
 
-### Local smoke test first (~10 min)
+### Local smoke test first (~2 min, no Tinker cost)
 ```bash
 python src/train.py \
-  --model_name_or_path Qwen/Qwen3-8B \
-  --data_dir data/processed \
-  --output_dir outputs/sft_smoke \
-  --num_train_epochs 1 \
-  --max_steps 20 \
-  --per_device_train_batch_size 1 \
-  --gradient_accumulation_steps 1
+  --base-model sshleifer/tiny-gpt2 \
+  --output-dir outputs/sft_smoke \
+  --dry-run --dry-run-steps 3
 ```
 
 ### Full SFT run
 ```bash
 bash scripts/run_pipeline.sh sft
-# or full local command:
+# or:
 bash scripts/run_local_training.sh
 ```
 
@@ -115,19 +113,20 @@ bash scripts/run_local_training.sh
 ```bash
 python src/evaluate.py \
   --base-model Qwen/Qwen3-8B \
-  --sft-adapter outputs/sft/final_adapter \
   --mode sft \
-  --output-dir outputs/eval_sft
+  --sft-output-dir outputs/sft \
+  --output outputs/eval_sft.json
 ```
 
 Expected: tool_selection ~85%, argument_accuracy ~75%, multi_step ~70%.
 
-## Phase 6: GRPO Training (1-2 hours on T4)
+## Phase 6: GRPO Training
 
-Reinforcement learning with binary verifiable rewards (rank 32, LR 3e-5, 50 steps).
+Reinforcement learning with binary verifiable rewards (rank 32, LR 4e-5, 50 steps).
+Training runs on Tinker’s remote GPUs.
 
 ### Prerequisites
-- SFT adapter must exist at `outputs/sft/final_adapter/`
+- SFT checkpoint must exist at `outputs/sft/` (with `checkpoints.jsonl`)
 - SFT eval should show tool_selection > 60% (otherwise GRPO rewards will be all zero)
 
 ### Run GRPO
@@ -136,8 +135,7 @@ bash scripts/run_pipeline.sh grpo
 # or:
 python src/train_grpo.py \
   --base-model Qwen/Qwen3-8B \
-  --sft-adapter outputs/sft/final_adapter \
-  --data-dir data/processed \
+  --sft-checkpoint outputs/sft \
   --output-dir outputs/grpo
 ```
 
@@ -149,10 +147,10 @@ If all rewards stay at 0 after 10 steps, see [TROUBLESHOOTING.md](docs/TROUBLESH
 ```bash
 python src/evaluate.py \
   --base-model Qwen/Qwen3-8B \
-  --sft-adapter outputs/sft/final_adapter \
-  --grpo-adapter outputs/grpo/final_adapter \
   --mode grpo \
-  --output-dir outputs/eval_grpo
+  --sft-output-dir outputs/sft \
+  --grpo-output-dir outputs/grpo \
+  --output outputs/eval_grpo.json
 ```
 
 Expected: tool_selection >90%, argument_accuracy >85%, multi_step >80%.
@@ -166,10 +164,10 @@ bash scripts/run_pipeline.sh compare
 # or:
 python src/evaluate.py \
   --base-model Qwen/Qwen3-8B \
-  --sft-adapter outputs/sft/final_adapter \
-  --grpo-adapter outputs/grpo/final_adapter \
   --mode compare \
-  --output-dir outputs/eval_compare
+  --sft-output-dir outputs/sft \
+  --grpo-output-dir outputs/grpo \
+  --output outputs/eval_compare.json
 ```
 
 Output: markdown table showing Baseline vs SFT vs GRPO across all metrics.

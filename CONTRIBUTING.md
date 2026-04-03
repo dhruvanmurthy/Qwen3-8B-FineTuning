@@ -47,30 +47,26 @@ Improve evaluation beyond tool selection accuracy:
 3. Add benchmark results
 
 ### 3. Multi-Node Distributed Training (Future)
-Single-node multi-GPU (DDP via torchrun) is supported.
-For multi-node scaling:
+Tinker handles remote GPU training. For local multi-GPU support:
 - [ ] DeepSpeed ZeRO Stage 2/3 integration
 - [ ] FSDP support
-- [ ] Gradient compression
-- [ ] Communication optimization
 
 **How to contribute**:
 1. Implement in `src/train.py`
-2. Test on multi-GPU SKU
+2. Test on multi-GPU setup
 3. Document speedup results
 
-### 4. Cost Reduction Strategies
-Further optimize budget:
+### 4. Training Improvements
+Further optimize training:
 - [ ] Mixed precision training (FP8)
 - [ ] Quantization-aware training
 - [ ] Knowledge distillation to smaller models
 - [ ] Data augmentation strategies
 
 **How to contribute**:
-1. Implement cost reduction technique
-2. Compare training time and cost
-3. Update `docs/BUDGET_OPTIMIZATION.md`
-4. Show final model quality metrics
+1. Implement training improvement
+2. Compare training time and quality
+3. Show final model quality metrics
 
 ### 5. Inference Optimization
 Improve model serving:

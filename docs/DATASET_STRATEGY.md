@@ -474,11 +474,10 @@ dataset = dataset.filter(
 
 ✅ Dataset version pinned (v1.0)
 ✅ Random seed (42) for all splits
-✅ DVC tracked (`.dvc` files in git)
-✅ Preprocessing script versioned
+✅ Preprocessing script versioned in Git
 ✅ License attribution (DATASET_CARD.md)
 ✅ Sample examples in documentation
-✅ Source URLs and hashes recorded
+✅ Source URLs recorded
 
 ## GRPO Prompt Preparation
 

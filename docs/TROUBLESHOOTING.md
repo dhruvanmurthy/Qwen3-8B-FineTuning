@@ -4,6 +4,9 @@ Common issues and solutions for Qwen3-8B fine-tuning project.
 
 ## Local Training Issues
 
+> **Note**: Training runs on Tinker’s remote GPUs. These issues only apply to
+> local dry-run validation or local inference.
+
 ### Problem: Out of Memory (OOM)
 
 **Error**:
@@ -330,7 +333,7 @@ export WANDB_PROJECT="qwen3-8b-tool-use"
    ```bash
    # First check SFT quality
    python src/evaluate.py --base-model Qwen/Qwen3-8B \
-     --sft-adapter outputs/sft/final_adapter --mode sft
+     --sft-output-dir outputs/sft --mode sft
    # If tool_selection < 60%, re-train SFT with more data or epochs
    ```
 
@@ -346,46 +349,45 @@ export WANDB_PROJECT="qwen3-8b-tool-use"
    learning_rate: 1e-5  # Instead of 3e-5
    ```
 
-### Problem: OOM During GRPO (16 Generations)
+### Problem: OOM During GRPO (Generations)
 
 **Error**:
 ```
 CUDA out of memory during generation step
 ```
 
-GRPO generates `num_generations=16` completions per prompt, which uses 16× inference memory.
+GRPO generates multiple completions per prompt (controlled by `--group-size`), which uses more memory.
 
 **Solutions**:
 1. Reduce generations per group:
-   ```yaml
-   num_generations: 8  # Instead of 16
+   ```bash
+   python src/train_grpo.py --group-size 4  # Instead of 8
    ```
 
-2. Reduce per-device batch size:
-   ```yaml
-   per_device_train_batch_size: 2  # Instead of 4
-   gradient_accumulation_steps: 64  # Keep effective batch at 128
+2. Reduce batch size:
+   ```bash
+   python src/train_grpo.py --batch-size 8  # Instead of 16
    ```
 
 3. Reduce max generation length:
-   ```yaml
-   max_completion_length: 256  # Instead of 512
+   ```bash
+   python src/train_grpo.py --max-completion-length 256  # Instead of 512
    ```
 
-### Problem: SFT Adapter Not Found for GRPO
+### Problem: SFT Checkpoint Not Found for GRPO
 
 **Error**:
 ```
-FileNotFoundError: outputs/sft/final_adapter/adapter_config.json
+FileNotFoundError: outputs/sft/checkpoints.jsonl not found
 ```
 
 **Solution**:
 ```bash
 # Verify SFT output exists
-ls outputs/sft/final_adapter/
+ls outputs/sft/
 
 # Then pass the correct path
-python src/train_grpo.py --sft-adapter outputs/sft/final_adapter ...
+python src/train_grpo.py --sft-checkpoint outputs/sft ...
 ```
 
 ### Problem: TRL Version Incompatibility
@@ -397,11 +399,11 @@ ImportError: cannot import name 'GRPOConfig' from 'trl'
 
 **Solution**:
 ```bash
-# GRPOTrainer requires trl >= 0.14.0
+# trl >= 0.14.0 is required
 pip install "trl>=0.14.0"
 
 # Verify
-python -c "from trl import GRPOConfig, GRPOTrainer; print('TRL OK')"
+python -c "import trl; print('TRL OK, version:', trl.__version__)"
 ```
 
 ## Evaluation Issues
@@ -429,23 +431,22 @@ python -c "from trl import GRPOConfig, GRPOTrainer; print('TRL OK')"
    outputs = model.generate(batch_encodings, ...)
    ```
 
-### Problem: GRPO Evaluation Fails to Load Stacked Adapters
+### Problem: GRPO Evaluation Fails to Load Model
 
 **Error**:
 ```
-RuntimeError: size mismatch for model.layers...
+Could not resolve sampler path for GRPO
 ```
 
-The GRPO adapter must be loaded on top of the *merged* SFT model, not stacked.
+The evaluation script automatically reads the last `sampler_path` from `checkpoints.jsonl`.
 
-**Solution**: The evaluate script handles this automatically by merging SFT first.
-If running manually, merge SFT before loading GRPO:
-```python
-from peft import PeftModel
-base = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-8B")
-sft_model = PeftModel.from_pretrained(base, "outputs/sft/final_adapter")
-merged = sft_model.merge_and_unload()  # Merge SFT into weights
-grpo_model = PeftModel.from_pretrained(merged, "outputs/grpo/final_adapter")
+**Solution**: Ensure the GRPO output directory contains a `checkpoints.jsonl` file,
+or pass the sampler path explicitly:
+```bash
+python src/evaluate.py \
+  --mode grpo \
+  --grpo-sampler-path "tinker://your-sampler-path" \
+  --output outputs/eval_grpo.json
 ```
 
 ## General Debugging
@@ -490,13 +491,55 @@ Get-Volume  # Windows
 ## Getting Help
 
 1. **Check Logs**:
-   - Local: `logs/training.log`
+   - Local: `outputs/*/` directories
    - W&B: https://wandb.ai/dhruvanmurthy/qwen3-8b-tool-use
 
 2. **Search Issues**:
    - https://github.com/dhruvanmurthy/Qwen3-8B-FineTuning/issues
    - https://github.com/huggingface/transformers/issues
-   - https://github.com/microsoft/peft/issues
+
+## Tinker-Specific Issues
+
+### Problem: Tinker API Key Not Set
+
+**Error**:
+```
+Error: TINKER_API_KEY not set.
+```
+
+**Solution**:
+```bash
+export TINKER_API_KEY="your_key_here"
+# Or add to .env file
+```
+
+Get a key at https://tinker-console.thinkingmachines.ai/
+
+### Problem: Tinker Connection Timeout
+
+**Symptoms**:
+- Training hangs during remote GPU initialization
+- Connection errors from Tinker API
+
+**Solutions**:
+1. Check your internet connection
+2. Verify your API key is valid and not expired
+3. Check Tinker service status
+4. Retry — transient network issues may resolve on their own
+
+### Problem: Sampler Path Not Found
+
+**Symptoms**:
+- Evaluation can’t find the trained model for SFT/GRPO
+
+**Solution**:
+```bash
+# Check if checkpoints.jsonl exists and has sampler_path entries
+cat outputs/sft/checkpoints.jsonl | python -m json.tool
+
+# Pass the sampler path explicitly if auto-detection fails
+python src/evaluate.py --sft-sampler-path "tinker://..." --mode sft
+```
 
 3. **Community Help**:
    - Hugging Face Discussions: https://discuss.huggingface.co/

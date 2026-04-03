@@ -1,41 +1,38 @@
 # Training Plan & Strategy
 
-Detailed guide to the **three-stage training pipeline**: Baseline evaluation → SFT (QLoRA) → GRPO (online RL with binary rewards).
+Detailed guide to the **three-stage training pipeline**: Baseline evaluation → SFT (LoRA) → GRPO (online RL with binary rewards).
 
 ## Overview
 
 **Pipeline**:
 1. **Stage 0 — Baseline**: Evaluate Qwen3-8B zero-shot on tool-use benchmarks
-2. **Stage 1 — SFT**: QLoRA supervised fine-tuning (LoRA r=64, LR 2e-4, 3 epochs)
+2. **Stage 1 — SFT**: LoRA supervised fine-tuning (LoRA r=64, LR 2e-4, 3 epochs)
 3. **Stage 2 — GRPO**: Group Relative Policy Optimization (LoRA r=32, LR 3e-5, batch 128, group 16, 50 steps)
 
-**Compute**: Single or multi-GPU (DDP via torchrun)
-**Total Training Time**: ~22-28 hours on 1× T4 (SFT + GRPO), scales linearly with GPU count
-**Budget**: ~$64-100 for full pipeline
+**Compute**: Remote GPU training via [Tinker](https://tinker.thinkingmachines.ai/) — no local GPU required
+**Total Training Time**: ~6-20 hours depending on dataset size and hyperparameters
 
 ### Stage Summary
 
-| Stage | Method | LoRA Rank | LR | Steps | Cost (T4 Dedicated) |
-|-------|--------|-----------|------|-------|------------------|
-| Baseline | Eval only | — | — | — | ~$1.50 |
-| SFT | QLoRA + Trainer | 64 | 2e-4 | ~3,750 | ~$27 |
-| GRPO | QLoRA + GRPOTrainer | 32 | 3e-5 | 50 | ~$6 |
+| Stage | Method | LoRA Rank | LR | Steps |
+|-------|--------|-----------|----|-------|
+| Baseline | Eval only | — | — | — |
+| SFT | LoRA via Tinker | 64 | 2e-4 | ~3,750 |
+| GRPO | LoRA + GRPO via Tinker | 32 | 4e-5 | 50 |
 
-## Why QLoRA?
+## Why LoRA?
 
-✅ **Memory Efficient**: 11GB vs 80GB+ for full fine-tuning
-✅ **Fast**: 40% faster than LoRA, maintains quality
-✅ **Cost-Effective**: Fits on consumer GPUs (A10, RTX collection)
+✅ **Memory Efficient**: Much smaller than full fine-tuning
+✅ **Fast**: Maintains quality with fewer trainable parameters
 ✅ **Proven**: SOTA results on multiple benchmarks (Alpaca, MT-Bench)
 
 ### Comparison Table
 
-| Method | VRAM | Time (A100) | Quality | Cost |
-|--------|------|-------------|---------|------|
-| **Full (BF16)** | 180GB | 48h | 100% | $250 |
-| **LoRA** | 30GB | 20h | 98% | $80 |
-| **QLoRA** | 11GB | 20h | 97% | $50 |
-| **QLoRA + 4-bit** | 8GB | 22h | 96% | $45 |
+| Method | Trainable Params | Quality |
+|--------|------------------|---------|
+| **Full (BF16)** | 8B | 100% |
+| **LoRA** | ~3.3M | 98% |
+| **QLoRA (4-bit)** | ~3.3M | 97% |
 
 ## Hyperparameter Selection
 
@@ -114,7 +111,7 @@ seed: 42
 - **Warmup = 10%**: Stabilize early training, prevent divergence
 - **Weight decay = 0.01**: Prevent overfitting on 40k samples
 - **Gradient checkpointing**: Save 30% memory at 20% speed cost (worth it)
-- **adamw_8bit**: Memory-efficient optimizer, critical for QLoRA
+- **adamw_8bit**: Memory-efficient optimizer
 
 ### Batch Size & Gradient Accumulation
 
@@ -217,65 +214,36 @@ model.print_trainable_parameters()
 
 ### Step 3: Training
 
-```python
-from transformers import Trainer, TrainingArguments
+Training is handled by `src/train.py` using Tinker’s remote GPU infrastructure.
+The script prepares data locally, then runs forward/backward passes on Tinker.
 
-training_args = TrainingArguments(
-    output_dir="./outputs/qwen3-8b-tool-use",
-    overwrite_output_dir=True,
-    per_device_train_batch_size=16,
-    per_device_eval_batch_size=32,
-    gradient_accumulation_steps=2,
-    learning_rate=2e-4,
-    num_train_epochs=3,
-    warmup_ratio=0.1,
-    weight_decay=0.01,
-    lr_scheduler_type="linear",
-    max_grad_norm=1.0,
-    eval_strategy="steps",
-    eval_steps=250,
-    save_steps=250,
-    save_total_limit=3,
-    load_best_model_at_end=True,
-    metric_for_best_model="eval_loss",
-    logging_steps=10,
-    logging_dir="./logs",
-    report_to=["wandb"],
-    seed=42,
-    bf16=True,
-    gradient_checkpointing=True,
-    optim="adamw_8bit"
-)
+```bash
+# Full SFT training
+python src/train.py \
+    --base-model Qwen/Qwen3-8B \
+    --output-dir ./outputs/sft \
+    --lora-rank 64 \
+    --learning-rate 2e-4 \
+    --batch-size 8 \
+    --num-epochs 3 \
+    --max-seq-length 2048 \
+    --logging-steps 10 \
+    --save-steps 25 \
+    --seed 42
+```
 
-trainer = Trainer(
-    model=model,
-    args=training_args,
-    train_dataset=train_data,
-    eval_dataset=eval_data,
-    tokenizer=tokenizer,
-    data_collator=DataCollatorForLanguageModeling(
-        tokenizer=tokenizer,
-        mlm=False,
-        pad_to_multiple_of=8
-    )
-)
-
-trainer.train()
+Or use the convenience script:
+```bash
+bash scripts/run_local_training.sh
 ```
 
 ### Step 4: Save & Push
 
-```python
-# Save locally
-model.save_pretrained("./outputs/qwen3-8b-tool-use-final")
-tokenizer.save_pretrained("./outputs/qwen3-8b-tool-use-final")
+The training script automatically saves checkpoints to `--output-dir`.
+Checkpoint metadata is saved in `checkpoints.jsonl` with Tinker sampler paths.
 
-# Push to HuggingFace Hub
-model.push_to_hub(
-    "dhruvanmurthy/qwen3-8b-tool-use-lora",
-    token=os.getenv("HF_TOKEN")
-)
-```
+To push to HuggingFace Hub, set `HF_TOKEN` and `HF_REPO_ID` environment variables —
+the script handles the upload automatically.
 
 ## Expected Training Dynamics
 
@@ -384,27 +352,15 @@ RuntimeError: CUDA out of memory
 
 ## Single-GPU Training Note
 
-The current compute target is **STANDARD_NC4AS_T4_V3** (1× T4 16GB).
-QLoRA 4-bit uses ~12-15 GB VRAM, so a single GPU is more than sufficient.
-Distributed training (DDP, DeepSpeed, FSDP) is **not needed** for this setup.
+Training runs on Tinker’s remote GPUs, so local GPU configuration is not relevant.
+The Tinker infrastructure handles GPU selection and allocation automatically.
 
-If you move to a multi-GPU SKU in the future:
-
-```yaml
-ddp_world_size: 2                   # Number of GPUs
-ddp_find_unused_parameters: true
-ddp_backend: nccl
-
-# Effective batch becomes: per_device_batch * num_gpus * grad_acc
-# 16 * 2 * 2 = 64 (very large, may reduce grad_acc to 1)
-```
-
+For local dry-run validation (no GPU cost):
 ```bash
-# Run via torch.distributed.launch
-torchrun --nproc_per_node=2 src/train.py \
-  --model_name_or_path Qwen/Qwen3-8B \
-  --data_dir data/processed \
-  --output_dir outputs/sft
+python src/train.py \
+  --base-model sshleifer/tiny-gpt2 \
+  --output-dir outputs/sft_smoke \
+  --dry-run --dry-run-steps 3
 ```
 
 ## Memory Profiling
@@ -418,7 +374,7 @@ print(f"Max allocated: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
 print(f"Reserved: {torch.cuda.memory_reserved() / 1e9:.2f} GB")
 ```
 
-Expected for QLoRA (T4):
+Expected for LoRA training:
 - Model weights (quantized): 2.5 GB
 - LoRA params: 0.3 GB
 - Optimizer states (8bit): 3-4 GB
@@ -429,78 +385,26 @@ Expected for QLoRA (T4):
 
 ### Save/Resume Checkpoints
 
-```bash
-# Training automatically saves checkpoints at eval_steps
-# To resume from checkpoint:
-python src/train.py \
-  --model_name_or_path Qwen/Qwen3-8B \
-  --data_dir data/processed \
-  --output_dir outputs/sft \
-  --resume-from-checkpoint ./outputs/checkpoint-2500
-```
+Checkpoints are automatically saved at intervals defined by `--save-steps`.
+Metadata including Tinker sampler paths is written to `checkpoints.jsonl`.
+The training script automatically resumes from the last checkpoint if one exists.
 
 ### Handling Failures
 
-Jobs can fail due to hardware issues or timeouts.
+If training is interrupted, re-run the same command — it will resume from the
+last saved checkpoint.
 
-**Solution**: Enable automatic recovery:
+## Recommendation: Default Setup
 
-```python
-# In training script
-if not training_complete:
-    resume_from_last_checkpoint = True
-    trainer.train(resume_from_checkpoint=True)
-```
+**Use this for most runs:**
 
-## Cost-Optimized Training Variants
-
-### Variant 1: Budget (A10 GPU, ~$0.75/hr)
-
-```yaml
-# Reduced to fit A10 (24GB VRAM)
-per_device_train_batch_size: 8
-gradient_accumulation_steps: 4
-max_length: 1024
-lora_r: 32
-# Time: ~3 days, Cost: ~$55
-```
-
-### Variant 2: Fast (A100, ~$1.50/hr spot)
-
-```yaml
-# Optimized for speed
-per_device_train_batch_size: 32        # Large batch
-gradient_accumulation_steps: 1
-eval_steps: 500                        # Less frequent eval
-num_train_epochs: 2                    # Fewer epochs
-# Time: ~14 hours, Cost: ~$25 (if fully utilized)
-```
-
-### Variant 3: Quality (A100, full)
-
-```yaml
-# Best results
-per_device_train_batch_size: 16        # Balanced
-gradient_accumulation_steps: 4         # Large effective batch
-num_train_epochs: 5                    # Very thorough
-warmup_ratio: 0.05                     # Slower warmup
-# Time: ~50 hours, Cost: ~$75, Better convergence
-```
-
-## Recommendation: Balanced Setup
-
-**Use this for most projects:**
-
-```yaml
-# configs/training.yaml (default)
-per_device_train_batch_size: 16
-per_device_eval_batch_size: 32
-gradient_accumulation_steps: 2
-num_train_epochs: 3
-learning_rate: 2e-4
-warmup_ratio: 0.1
-
-# Expected: ~20h on T4, cost ~$30 (spot), eval_loss ~1.3-1.5
+```bash
+python src/train.py \
+    --base-model Qwen/Qwen3-8B \
+    --lora-rank 64 \
+    --learning-rate 2e-4 \
+    --batch-size 8 \
+    --num-epochs 3
 ```
 
 ## Next Steps
@@ -521,9 +425,9 @@ After SFT, the model is further improved via **Group Relative Policy Optimizatio
 | Parameter | Value | Rationale |
 |---|---|---|
 | LoRA rank | 32 | Smaller than SFT — GRPO is a refinement |
-| LR | 3e-5 | 7× lower than SFT — fine adjustments only |
-| Effective batch | 128 (4 × 32) | Large batch for stable policy gradient |
-| Group size | 16 | 16 completions per prompt for relative ranking |
+| LR | 4e-5 | Lower than SFT — fine adjustments only |
+| Batch size | 16 | Prompts per GRPO step |
+| Group size | 8 | 8 completions per prompt for relative ranking |
 | Max steps | 50 | Short — diminishing returns after ~50 |
 | Max completion | 512 tokens | Enough for 1-2 tool calls per completion |
 | Max prompt | 1024 tokens | Fits system prompt + user query + tools |
@@ -539,30 +443,28 @@ All rewards are programmatic (0.0 or 1.0) — no learned reward model:
 | `schema_validation_reward` | 1.0 if output is a valid JSON tool call |
 | `full_chain_reward` | 1.0 if all tools in a multi-step chain are correct |
 
-GRPOTrainer receives all four functions and logs each dimension separately in W&B.
+The GRPO trainer receives all four functions and logs each dimension separately in W&B.
 
 ### Atropos Coordinator
 
-The coordinator bridges reward environments with GRPOTrainer:
+The coordinator bridges reward environments with the GRPO training loop:
 - Creates per-source environments (api_bank, toolbench, gorilla, synthetic)
 - Each environment provides prompts and computes rewards
 - Unified prompt dataset is built by sampling proportionally from all sources
-- For single-machine training: in-process mode (no separate servers)
-- For multi-machine: swap with the full `atropos` package from NousResearch
 
 ### GRPO Training Flow
 
 ```
-1. Load base model + merge SFT adapter weights
-2. Apply fresh LoRA (r=32) on top of merged model
-3. Build prompt dataset via AtroposCoordinator
+1. Load base model + resume from SFT checkpoint on Tinker
+2. Apply fresh LoRA (r=32) on top
+3. Build prompt dataset from synthetic data
 4. For each GRPO step:
    a. Sample batch of prompts
-   b. Generate 16 completions per prompt
+   b. Generate completions per prompt (group-size per prompt)
    c. Score each completion with binary rewards
    d. Compute GRPO loss (group-relative advantage)
-   e. Update LoRA weights
-5. Save GRPO adapter to outputs/grpo/
+   e. Update LoRA weights via importance_sampling loss
+5. Save GRPO checkpoint to outputs/grpo/
 ```
 
 ### When to Increase GRPO Steps

@@ -55,6 +55,10 @@ structure, required fields present, types correct).
 
 ## Running Evaluations
 
+All inference runs on Tinker’s remote GPUs (requires `TINKER_API_KEY`).
+Sampler paths for SFT/GRPO models are auto-detected from `checkpoints.jsonl`
+in the respective output directories.
+
 ### CLI usage
 
 ```bash
@@ -62,38 +66,38 @@ structure, required fields present, types correct).
 python src/evaluate.py \
   --base-model Qwen/Qwen3-8B \
   --mode baseline \
-  --output-dir outputs/eval_baseline
+  --output outputs/eval_baseline.json
 
 # Evaluate SFT
 python src/evaluate.py \
   --base-model Qwen/Qwen3-8B \
-  --sft-adapter outputs/sft/final_adapter \
   --mode sft \
-  --output-dir outputs/eval_sft
+  --sft-output-dir outputs/sft \
+  --output outputs/eval_sft.json
 
 # Evaluate GRPO
 python src/evaluate.py \
   --base-model Qwen/Qwen3-8B \
-  --sft-adapter outputs/sft/final_adapter \
-  --grpo-adapter outputs/grpo/final_adapter \
   --mode grpo \
-  --output-dir outputs/eval_grpo
+  --sft-output-dir outputs/sft \
+  --grpo-output-dir outputs/grpo \
+  --output outputs/eval_grpo.json
 
 # Side-by-side comparison (requires all three results)
 python src/evaluate.py \
   --base-model Qwen/Qwen3-8B \
-  --sft-adapter outputs/sft/final_adapter \
-  --grpo-adapter outputs/grpo/final_adapter \
   --mode compare \
-  --output-dir outputs/eval_compare
+  --sft-output-dir outputs/sft \
+  --grpo-output-dir outputs/grpo \
+  --output outputs/eval_compare.json
 
 # Run everything in sequence
 python src/evaluate.py \
   --base-model Qwen/Qwen3-8B \
-  --sft-adapter outputs/sft/final_adapter \
-  --grpo-adapter outputs/grpo/final_adapter \
   --mode all \
-  --output-dir outputs/eval_all
+  --sft-output-dir outputs/sft \
+  --grpo-output-dir outputs/grpo \
+  --output outputs/eval_all.json
 ```
 
 ### Via the pipeline script
@@ -110,11 +114,7 @@ bash scripts/run_pipeline.sh compare    # comparison table
 ### Via the evaluate helper script
 
 ```bash
-bash scripts/evaluate_model.sh \
-  --base-model Qwen/Qwen3-8B \
-  --sft-adapter outputs/sft/final_adapter \
-  --grpo-adapter outputs/grpo/final_adapter \
-  --mode all
+bash scripts/evaluate_model.sh all
 ```
 
 ## Expected Results
@@ -131,13 +131,14 @@ Target comparison table (actual results will vary):
 
 ## How Model Loading Works
 
-Understanding the model loading chain is important for reproducibility:
+All inference runs on Tinker’s remote GPUs via sampling clients:
 
-1. **Baseline**: `AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-8B")` in bf16.
-2. **SFT**: Same base model + `PeftModel.from_pretrained(base, sft_adapter_path)`.
-3. **GRPO**: Base model → merge SFT adapter into weights → `PeftModel.from_pretrained(merged, grpo_adapter_path)`.
+1. **Baseline**: Tinker loads `Qwen/Qwen3-8B` from HuggingFace Hub.
+2. **SFT**: Tinker loads the model from the sampler path saved in `outputs/sft/checkpoints.jsonl`.
+3. **GRPO**: Tinker loads the model from the sampler path saved in `outputs/grpo/checkpoints.jsonl`.
 
-The GRPO stage merges SFT weights *first* because GRPO training started from a merged SFT checkpoint with a fresh LoRA on top.
+Sampler paths (`tinker://` URIs) are auto-detected from the checkpoint logs. You can
+also pass them explicitly via `--sft-sampler-path` and `--grpo-sampler-path`.
 
 ## GRPO-Specific Metrics
 
@@ -171,31 +172,20 @@ The compare stage logs a W&B Table with all three stages side-by-side.
 
 ## Output Files
 
-Each evaluation writes a JSON file to the output directory:
+Each evaluation writes a JSON file to the `--output` path:
 
 ```
-outputs/eval_all/
-├── baseline_results.json
-├── sft_results.json
-├── grpo_results.json
-└── comparison.json
+outputs/evaluation_results.json
 ```
 
-Each JSON contains the metric values, example-level predictions, and metadata
-(model paths, dataset sizes, timestamps).
+The JSON contains metric values for each evaluated stage, plus a comparison table
+when running in `compare` or `all` mode.
 
 ## Next Steps
 
 - Review results in W&B: https://wandb.ai/dhruvanmurthy/qwen3-8b-tool-use
 - If GRPO targets are not met, increase `max_steps` beyond 50 (see [TRAINING_PLAN.md](TRAINING_PLAN.md))
 - Push final model to HF Hub: `huggingface-cli upload dhruvanmurthy/qwen3-8b-tool-use-lora outputs/grpo/final_adapter`
-        example["query"],
-        example["expected_calls"],
-        pred,
-        pred == example["expected_calls"]
-    )
-wandb.log({"evaluation_examples": eval_table})
-```
 
 ## Per-Category Breakdown
 

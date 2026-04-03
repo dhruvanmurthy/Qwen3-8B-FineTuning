@@ -488,6 +488,46 @@ async def train_grpo(args):
             step, args.max_steps, mean_reward, frac_degenerate * 100, len(datums),
         )
 
+        # ---- Sample I/O logging ----
+        log_every = getattr(args, "log_samples_every", 10)
+        log_n = getattr(args, "log_samples_n", 2)
+        if log_every > 0 and step % log_every == 0 and sample_results:
+            sample_rows = []
+            for si in range(min(log_n, len(batch_prompts))):
+                prompt_info = batch_prompts[si]
+                parsed_msg, _ = renderer.parse_response(
+                    sample_results[si].sequences[0].tokens
+                )
+                completion_text = get_text_content(parsed_msg)
+                seq_reward = step_component_rewards.get("tool_name", [None])
+                reward_val = seq_reward[si] if seq_reward and si < len(seq_reward) else float("nan")
+
+                logger.info(
+                    "\n--- Sample %d (step %d) ---\n"
+                    "[PROMPT]\n%s\n"
+                    "[COMPLETION]\n%s\n"
+                    "[REWARD] %.2f\n"
+                    "------------------------------",
+                    si + 1, step,
+                    prompt_info["user"][:500],
+                    completion_text[:800],
+                    reward_val,
+                )
+                sample_rows.append([
+                    step, si + 1,
+                    prompt_info["user"][:500],
+                    completion_text[:800],
+                    prompt_info["expected_tool"],
+                    reward_val,
+                ])
+
+            samples_table = wandb.Table(
+                columns=["step", "sample", "prompt", "completion", "expected_tool", "reward"]
+            )
+            for row in sample_rows:
+                samples_table.add_data(*row)
+            wandb.log({"train/samples": samples_table}, step=step)
+
         # ---- W&B per-step metrics ----
         log_dict: dict = {
             "train/reward_mean": mean_reward,
@@ -698,6 +738,10 @@ def main():
                    help="Run local smoke validation without Tinker training calls")
     p.add_argument("--dry-run-steps", type=int, default=3,
                    help="Number of mock steps to log when --dry-run is enabled")
+    p.add_argument("--log-samples-every", type=int, default=10,
+                   help="Log sample prompt/completion pairs every N steps (0 to disable)")
+    p.add_argument("--log-samples-n", type=int, default=2,
+                   help="Number of sample prompt/completion pairs to log per interval")
     p.add_argument("--dry-run-prompts", type=int, default=32,
                    help="Synthetic prompt count to report in --dry-run mode")
     a = p.parse_args()

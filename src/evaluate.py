@@ -283,11 +283,23 @@ class ToolUseEvaluator:
         self.label = label
         self.results: Dict[str, float] = {}
 
+    SYSTEM_PROMPT = (
+        "You are a helpful assistant that can use tools. "
+        "When you need to use a tool, respond with a JSON tool call "
+        "inside <tool_call> tags, like:\n"
+        "<tool_call>\n"
+        '{"name": "tool_name", "arguments": {"arg": "value"}}\n'
+        "</tool_call>"
+    )
+
     # --- generation ---
 
     async def generate(self, prompt: str, max_new_tokens: int = 512) -> tuple:
         """Return (text, n_output_tokens) via Tinker sample_async."""
-        convo = [{"role": "user", "content": prompt}]
+        convo = [
+            {"role": "system", "content": self.SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
         model_input = self.renderer.build_generation_prompt(convo)
         result = await self.sampling_client.sample_async(
             prompt=model_input,
