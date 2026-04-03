@@ -43,6 +43,60 @@ TOOL_USE_SYSTEM_PROMPT = (
 )
 
 
+async def _create_lora_training_client_compat(service_client, base_model: str, rank: int,
+                                              checkpoint_path: Optional[str] = None,
+                                              load_optimizer: bool = True):
+    """Create LoRA training client across Tinker API versions.
+
+    Newer Tinker versions removed `checkpoint=` from
+    `create_lora_training_client_async`. If checkpoint is requested, we create
+    a client from `base_model` and then load weights via `load_state*_async`.
+    """
+    if checkpoint_path:
+        try:
+            return await service_client.create_lora_training_client_async(
+                base_model=base_model,
+                rank=rank,
+                checkpoint=checkpoint_path,
+            )
+        except TypeError:
+            logger.warning(
+                "Tinker client does not support checkpoint=...; creating client from base model and loading state.",
+            )
+
+            client = await service_client.create_lora_training_client_async(
+                base_model=base_model,
+                rank=rank,
+            )
+            if load_optimizer:
+                load_future = await client.load_state_with_optimizer_async(checkpoint_path)
+            else:
+                load_future = await client.load_state_async(checkpoint_path)
+            await load_future.result_async()
+            return client
+
+        except Exception:
+            logger.warning(
+                "checkpoint=... path failed unexpectedly; retrying with explicit load_state API.",
+                exc_info=True,
+            )
+            client = await service_client.create_lora_training_client_async(
+                base_model=base_model,
+                rank=rank,
+            )
+            if load_optimizer:
+                load_future = await client.load_state_with_optimizer_async(checkpoint_path)
+            else:
+                load_future = await client.load_state_async(checkpoint_path)
+            await load_future.result_async()
+            return client
+
+    return await service_client.create_lora_training_client_async(
+        base_model=base_model,
+        rank=rank,
+    )
+
+
 def _run_dry_run_sft(args, n_train: int, n_val: int) -> None:
     """Run a local no-op training path to validate script wiring without Tinker."""
     logger.warning("Dry-run mode enabled: skipping Tinker remote training.")
@@ -269,14 +323,16 @@ async def train_sft(args):
     if resume_ckpt and resume_ckpt.state_path:
         logger.info("Resuming SFT from checkpoint: %s (step %s)", resume_ckpt.state_path, resume_ckpt.batch)
         logger.warning("Data will replay from the beginning of epoch 1. Weights are restored.")
-        training_client = await service_client.create_lora_training_client_async(
+        training_client = await _create_lora_training_client_compat(
+            service_client=service_client,
             base_model=args.base_model,
             rank=args.lora_rank,
-            checkpoint=resume_ckpt.state_path,
+            checkpoint_path=resume_ckpt.state_path,
         )
     else:
         logger.info("Creating new LoRA training client (base=%s, rank=%d)...", args.base_model, args.lora_rank)
-        training_client = await service_client.create_lora_training_client_async(
+        training_client = await _create_lora_training_client_compat(
+            service_client=service_client,
             base_model=args.base_model,
             rank=args.lora_rank,
         )

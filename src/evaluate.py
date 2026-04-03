@@ -337,41 +337,95 @@ class ToolUseEvaluator:
         logger.info("[%s] Evaluating tool selection…", self.label)
 
         correct = total = 0
+        sample_rows = []  # For W&B table logging
         for i, example in enumerate(examples):
             if i > 0 and i % 50 == 0:
-                logger.info("  progress: %d/%d", i, len(examples))
+                logger.info("  progress: %d/%d (acc so far: %.1f%%)",
+                            i, len(examples), 100 * correct / total if total else 0)
 
             if not example.expected_tool:
                 continue
 
             output, _ = await self.generate(example.prompt, max_new_tokens=256)
             predicted = self.extract_tool_name(output)
+            match = bool(predicted and predicted.lower() == example.expected_tool.lower())
 
-            if predicted and predicted.lower() == example.expected_tool.lower():
+            if match:
                 correct += 1
             total += 1
 
+            # Log first 20 examples and periodic mismatches for visibility
+            if total <= 20 or (not match and len(sample_rows) < 100):
+                status = "✓" if match else "✗"
+                logger.info(
+                    "  [%s] %s  expected=%s  predicted=%s  |  prompt=%.120s…",
+                    self.label, status, example.expected_tool, predicted,
+                    example.prompt.replace("\n", " "),
+                )
+                sample_rows.append({
+                    "prompt": example.prompt[:300],
+                    "expected_tool": example.expected_tool,
+                    "predicted_tool": predicted or "(none)",
+                    "match": match,
+                    "model_output": output[:500],
+                })
+
+        # Log sample table to W&B
+        if sample_rows:
+            table = wandb.Table(
+                columns=["prompt", "expected_tool", "predicted_tool", "match", "model_output"],
+                data=[[r["prompt"], r["expected_tool"], r["predicted_tool"], r["match"], r["model_output"]] for r in sample_rows],
+            )
+            wandb.log({f"{self.label}/tool_selection_samples": table})
+
         accuracy = correct / total if total > 0 else 0
         self.results["tool_selection_accuracy"] = accuracy
-        logger.info("[%s] Tool Selection: %.1f%%", self.label, 100 * accuracy)
+        logger.info("[%s] Tool Selection: %.1f%% (%d/%d)", self.label, 100 * accuracy, correct, total)
         return accuracy
 
     async def evaluate_argument_accuracy(self, examples: List[EvalExample]) -> float:
         logger.info("[%s] Evaluating argument accuracy…", self.label)
 
         correct = total = 0
-        for example in examples:
+        sample_rows = []
+        for i, example in enumerate(examples):
             if not example.expected_args:
                 continue
 
             output, _ = await self.generate(example.prompt, max_new_tokens=256)
 
             call = extract_tool_call(output)
+            pred_args = None
+            match = False
             if call:
                 pred_args = call.get("arguments", call.get("parameters", {}))
                 if pred_args == example.expected_args:
                     correct += 1
+                    match = True
             total += 1
+
+            if total <= 10 or (not match and len(sample_rows) < 50):
+                status = "✓" if match else "✗"
+                logger.info(
+                    "  [%s] %s  expected_args=%s  predicted_args=%s",
+                    self.label, status,
+                    json.dumps(example.expected_args)[:120],
+                    json.dumps(pred_args)[:120] if pred_args else "(none)",
+                )
+                sample_rows.append({
+                    "prompt": example.prompt[:300],
+                    "expected_args": json.dumps(example.expected_args)[:300],
+                    "predicted_args": json.dumps(pred_args)[:300] if pred_args else "(none)",
+                    "match": match,
+                    "model_output": output[:500],
+                })
+
+        if sample_rows:
+            table = wandb.Table(
+                columns=["prompt", "expected_args", "predicted_args", "match", "model_output"],
+                data=[[r["prompt"], r["expected_args"], r["predicted_args"], r["match"], r["model_output"]] for r in sample_rows],
+            )
+            wandb.log({f"{self.label}/argument_accuracy_samples": table})
 
         accuracy = correct / total if total > 0 else 0
         self.results["argument_accuracy"] = accuracy
@@ -382,38 +436,82 @@ class ToolUseEvaluator:
         logger.info("[%s] Evaluating schema compliance…", self.label)
 
         valid = total = 0
+        invalid_samples = []
         for example in examples:
             output, _ = await self.generate(example.prompt, max_new_tokens=256)
 
             call = extract_tool_call(output)
-            if (
+            is_valid = bool(
                 call
                 and isinstance(call.get("name"), str)
                 and isinstance(call.get("arguments", call.get("parameters", {})), dict)
-            ):
+            )
+            if is_valid:
                 valid += 1
+            elif len(invalid_samples) < 20:
+                logger.info(
+                    "  [%s] ✗ invalid schema  |  output=%.200s…",
+                    self.label, output.replace("\n", " "),
+                )
+                invalid_samples.append({
+                    "prompt": example.prompt[:300],
+                    "model_output": output[:500],
+                })
             total += 1
+
+        if invalid_samples:
+            table = wandb.Table(
+                columns=["prompt", "model_output"],
+                data=[[r["prompt"], r["model_output"]] for r in invalid_samples],
+            )
+            wandb.log({f"{self.label}/schema_invalid_samples": table})
 
         rate = valid / total if total > 0 else 0
         self.results["schema_compliance"] = rate
-        logger.info("[%s] Schema Compliance: %.1f%%", self.label, 100 * rate)
+        logger.info("[%s] Schema Compliance: %.1f%% (%d/%d)", self.label, 100 * rate, valid, total)
         return rate
 
     async def evaluate_multi_step(self, examples: List[EvalExample]) -> float:
         logger.info("[%s] Evaluating multi-step chains…", self.label)
         multi_step = [e for e in examples if len(e.expected_chain) > 1]
+        logger.info("  [%s] Found %d multi-step examples", self.label, len(multi_step))
 
         correct = total = 0
+        sample_rows = []
         for example in multi_step:
             output, _ = await self.generate(example.prompt, max_new_tokens=512)
             found = sum(1 for t in example.expected_chain if t.lower() in output.lower())
-            if found == len(example.expected_chain):
+            match = found == len(example.expected_chain)
+            if match:
                 correct += 1
             total += 1
 
+            if total <= 10 or (not match and len(sample_rows) < 30):
+                status = "✓" if match else "✗"
+                logger.info(
+                    "  [%s] %s  chain=%s  found=%d/%d  |  output=%.150s…",
+                    self.label, status, example.expected_chain,
+                    found, len(example.expected_chain),
+                    output.replace("\n", " "),
+                )
+                sample_rows.append({
+                    "prompt": example.prompt[:300],
+                    "expected_chain": str(example.expected_chain),
+                    "found": f"{found}/{len(example.expected_chain)}",
+                    "match": match,
+                    "model_output": output[:500],
+                })
+
+        if sample_rows:
+            table = wandb.Table(
+                columns=["prompt", "expected_chain", "found", "match", "model_output"],
+                data=[[r["prompt"], r["expected_chain"], r["found"], r["match"], r["model_output"]] for r in sample_rows],
+            )
+            wandb.log({f"{self.label}/multi_step_samples": table})
+
         rate = correct / total if total > 0 else 0
         self.results["multi_step_success"] = rate
-        logger.info("[%s] Multi-Step Success: %.1f%%", self.label, 100 * rate)
+        logger.info("[%s] Multi-Step Success: %.1f%% (%d/%d)", self.label, 100 * rate, correct, total)
         return rate
 
     async def evaluate_latency(self, examples: List[EvalExample], num_samples: int = 100) -> float:

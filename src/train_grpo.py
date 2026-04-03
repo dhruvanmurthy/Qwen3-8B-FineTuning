@@ -50,6 +50,60 @@ TOOL_USE_SYSTEM_PROMPT = (
 )
 
 
+async def _create_lora_training_client_compat(service_client, base_model: str, rank: int,
+                                              checkpoint_path: str | None = None,
+                                              load_optimizer: bool = True):
+    """Create LoRA training client across Tinker API versions.
+
+    Newer Tinker versions removed `checkpoint=` from
+    `create_lora_training_client_async`. If checkpoint is requested, we create
+    a client from `base_model` and then load weights via `load_state*_async`.
+    """
+    if checkpoint_path:
+        try:
+            return await service_client.create_lora_training_client_async(
+                base_model=base_model,
+                rank=rank,
+                checkpoint=checkpoint_path,
+            )
+        except TypeError:
+            logger.warning(
+                "Tinker client does not support checkpoint=...; creating client from base model and loading state.",
+            )
+
+            client = await service_client.create_lora_training_client_async(
+                base_model=base_model,
+                rank=rank,
+            )
+            if load_optimizer:
+                load_future = await client.load_state_with_optimizer_async(checkpoint_path)
+            else:
+                load_future = await client.load_state_async(checkpoint_path)
+            await load_future.result_async()
+            return client
+
+        except Exception:
+            logger.warning(
+                "checkpoint=... path failed unexpectedly; retrying with explicit load_state API.",
+                exc_info=True,
+            )
+            client = await service_client.create_lora_training_client_async(
+                base_model=base_model,
+                rank=rank,
+            )
+            if load_optimizer:
+                load_future = await client.load_state_with_optimizer_async(checkpoint_path)
+            else:
+                load_future = await client.load_state_async(checkpoint_path)
+            await load_future.result_async()
+            return client
+
+    return await service_client.create_lora_training_client_async(
+        base_model=base_model,
+        rank=rank,
+    )
+
+
 def _run_dry_run_grpo(args, n_prompts: int) -> None:
     """Run a local no-op GRPO path to validate script wiring without Tinker."""
     logger.warning("Dry-run mode enabled: skipping Tinker remote training.")
@@ -294,26 +348,31 @@ async def train_grpo(args):
     if grpo_ckpt and grpo_ckpt.state_path:
         start_step = grpo_ckpt.batch or 0
         logger.info("Resuming GRPO from checkpoint: %s (step %d)", grpo_ckpt.state_path, start_step)
-        training_client = await service_client.create_lora_training_client_async(
+        training_client = await _create_lora_training_client_compat(
+            service_client=service_client,
             base_model=args.base_model,
             rank=args.lora_rank,
-            checkpoint=grpo_ckpt.state_path,
+            checkpoint_path=grpo_ckpt.state_path,
+            load_optimizer=True,
         )
     else:
         sft_ckpt = get_last_checkpoint(args.sft_checkpoint) if args.sft_checkpoint else None
         if sft_ckpt and sft_ckpt.state_path:
             logger.info("Starting GRPO from SFT checkpoint: %s", sft_ckpt.state_path)
-            training_client = await service_client.create_lora_training_client_async(
+            training_client = await _create_lora_training_client_compat(
+                service_client=service_client,
                 base_model=args.base_model,
                 rank=args.lora_rank,
-                checkpoint=sft_ckpt.state_path,
+                checkpoint_path=sft_ckpt.state_path,
+                load_optimizer=False,
             )
         else:
             logger.info(
                 "No valid SFT checkpoint found in '%s'. Starting GRPO from base model: %s",
                 args.sft_checkpoint, args.base_model,
             )
-            training_client = await service_client.create_lora_training_client_async(
+            training_client = await _create_lora_training_client_compat(
+                service_client=service_client,
                 base_model=args.base_model,
                 rank=args.lora_rank,
             )
@@ -350,6 +409,13 @@ async def train_grpo(args):
     logger.info("  Max completion  : %d tokens", args.max_completion_length)
     if start_step > 0:
         logger.info("  Resuming from   : step %d", start_step)
+
+    if start_step >= args.max_steps:
+        logger.warning(
+            "Start step (%d) is already >= max_steps (%d). No GRPO steps will run; only final checkpoint/metadata will be written.",
+            start_step,
+            args.max_steps,
+        )
 
     # ---- GRPO training loop ----
     metrics_history = []
@@ -573,7 +639,10 @@ async def train_grpo(args):
     with open(metrics_path, "w") as f:
         json.dump(metrics_history, f, indent=2)
 
-    logger.info("GRPO training complete! Final reward: %.3f", metrics_history[-1]["reward"])
+    if metrics_history:
+        logger.info("GRPO training complete! Final reward: %.3f", metrics_history[-1]["reward"])
+    else:
+        logger.info("GRPO training complete! No optimization steps were executed in this run.")
 
     # ---- Push to Hugging Face Hub ----
     _hf_repo_id = os.getenv("HF_REPO_ID")
