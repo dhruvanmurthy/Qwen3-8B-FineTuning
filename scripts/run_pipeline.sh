@@ -7,6 +7,7 @@
 #
 # Training runs on Tinker's remote GPUs — no local GPU required.
 # Requires: TINKER_API_KEY environment variable.
+# Recommended: WANDB_API_KEY and HF_TOKEN for logging and Hub pushes.
 #
 # Usage:
 #   bash scripts/run_pipeline.sh           # run everything
@@ -20,10 +21,20 @@ set -e
 # Always run from the repo root
 cd "$(dirname "$0")/.."
 
+# Load .env file if it exists
+if [ -f .env ]; then
+    set -a
+    source .env
+    set +a
+fi
+
 STAGE="${1:-all}"
 BASE_MODEL="${BASE_MODEL:-Qwen/Qwen3-8B}"
 SFT_OUTPUT="${SFT_OUTPUT:-./outputs/sft}"
 GRPO_OUTPUT="${GRPO_OUTPUT:-./outputs/grpo}"
+WANDB_PROJECT="${WANDB_PROJECT:-qwen3-8b-tool-use}"
+WANDB_ENTITY="${WANDB_ENTITY:-}"
+HF_REPO_ID="${HF_REPO_ID:-}"
 
 # Verify Tinker API key
 if [ -z "$TINKER_API_KEY" ]; then
@@ -31,14 +42,29 @@ if [ -z "$TINKER_API_KEY" ]; then
     exit 1
 fi
 
+if [ -z "$WANDB_API_KEY" ]; then
+    echo "Warning: WANDB_API_KEY not set. W&B logging will run in disabled mode."
+fi
+
+if [ -n "$HF_REPO_ID" ] && [ -z "$HF_TOKEN" ]; then
+    echo "Warning: HF_REPO_ID set but HF_TOKEN is missing. Hub upload will be skipped."
+fi
+
+if [ -n "$HF_TOKEN" ] && [ -z "$HF_REPO_ID" ]; then
+    echo "Warning: HF_TOKEN is set but HF_REPO_ID is empty. Hub upload will be skipped."
+fi
+
 echo "============================================="
 echo " Qwen3-8B Tool-Use Fine-Tuning Pipeline"
 echo " (Tinker Remote Training)"
 echo "============================================="
-echo "  Base model : $BASE_MODEL"
-echo "  SFT output : $SFT_OUTPUT"
-echo "  GRPO output: $GRPO_OUTPUT"
-echo "  Stage      : $STAGE"
+echo "  Base model      : $BASE_MODEL"
+echo "  SFT output      : $SFT_OUTPUT"
+echo "  GRPO output     : $GRPO_OUTPUT"
+echo "  Stage           : $STAGE"
+echo "  W&B project     : $WANDB_PROJECT"
+if [ -n "$WANDB_ENTITY" ]; then echo "  W&B entity      : $WANDB_ENTITY"; fi
+if [ -n "$HF_REPO_ID" ]; then echo "  HF repo ID      : $HF_REPO_ID"; fi
 echo "============================================="
 
 # --------------------------------------------------
@@ -50,6 +76,7 @@ if [[ "$STAGE" == "baseline" || "$STAGE" == "all" ]]; then
     python3 src/evaluate.py \
         --mode baseline \
         --base-model "$BASE_MODEL" \
+        --wandb-project "$WANDB_PROJECT" \
         --output outputs/eval_baseline.json
 fi
 
@@ -76,7 +103,11 @@ if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
         --num-epochs 3 \
         --max-seq-length 2048 \
         --logging-steps 10 \
-        --save-steps 100
+        --save-steps 100 \
+        --wandb-project "$WANDB_PROJECT" \
+        ${WANDB_ENTITY:+--wandb-entity "$WANDB_ENTITY"} \
+        --wandb-run-name "sft-${BASE_MODEL##*/}" \
+        ${HF_REPO_ID:+--hf-repo-id "${HF_REPO_ID}-sft"}
 
     echo ""
     echo ">>> Stage 1: SFT Evaluation"
@@ -84,6 +115,7 @@ if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
         --mode sft \
         --base-model "$BASE_MODEL" \
         --sft-adapter "$SFT_OUTPUT" \
+        --wandb-project "$WANDB_PROJECT" \
         --output outputs/eval_sft.json
 fi
 
@@ -102,7 +134,11 @@ if [[ "$STAGE" == "grpo" || "$STAGE" == "all" ]]; then
         --batch-size 16 \
         --group-size 8 \
         --max-steps 50 \
-        --save-steps 10
+        --save-steps 10 \
+        --wandb-project "$WANDB_PROJECT" \
+        ${WANDB_ENTITY:+--wandb-entity "$WANDB_ENTITY"} \
+        --wandb-run-name "grpo-${BASE_MODEL##*/}" \
+        ${HF_REPO_ID:+--hf-repo-id "${HF_REPO_ID}-grpo"}
 
     echo ""
     echo ">>> Stage 2: GRPO Evaluation"
@@ -111,6 +147,7 @@ if [[ "$STAGE" == "grpo" || "$STAGE" == "all" ]]; then
         --base-model "$BASE_MODEL" \
         --sft-adapter "$SFT_OUTPUT" \
         --grpo-adapter "$GRPO_OUTPUT" \
+        --wandb-project "$WANDB_PROJECT" \
         --output outputs/eval_grpo.json
 fi
 
@@ -125,6 +162,7 @@ if [[ "$STAGE" == "compare" || "$STAGE" == "all" ]]; then
         --base-model "$BASE_MODEL" \
         --sft-adapter "$SFT_OUTPUT" \
         --grpo-adapter "$GRPO_OUTPUT" \
+        --wandb-project "$WANDB_PROJECT" \
         --output outputs/eval_comparison.json
 fi
 

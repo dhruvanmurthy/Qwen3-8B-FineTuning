@@ -50,6 +50,53 @@ TOOL_USE_SYSTEM_PROMPT = (
 )
 
 
+def _resolve_hf_repo_id(repo_id: str) -> str:
+    """Resolve short repo names using HF_USER if available."""
+    if not repo_id:
+        return repo_id
+    if "/" in repo_id:
+        return repo_id
+    hf_user = os.getenv("HF_USER")
+    if hf_user:
+        return f"{hf_user}/{repo_id}"
+    logger.warning(
+        "HF repo id '%s' has no namespace and HF_USER is not set. "
+        "Using as-is; upload may fail.",
+        repo_id,
+    )
+    return repo_id
+
+
+def _init_wandb(args) -> None:
+    """Initialize W&B in online or disabled mode depending on env keys."""
+    has_wandb_key = bool(os.getenv("WANDB_API_KEY"))
+    if not has_wandb_key:
+        logger.warning("WANDB_API_KEY not set. W&B logging will be disabled.")
+
+    wandb_entity = args.wandb_entity or os.getenv("WANDB_ENTITY")
+    init_kwargs = {
+        "project": args.wandb_project,
+        "name": args.wandb_run_name or f"grpo-{args.base_model.split('/')[-1]}",
+        "tags": ["grpo", "stage2", "rl", "tool-use"],
+        "config": {
+            "stage": "grpo",
+            "base_model": args.base_model,
+            "sft_checkpoint": args.sft_checkpoint,
+            "lora_rank": args.lora_rank,
+            "learning_rate": args.learning_rate,
+            "batch_size": args.batch_size,
+            "group_size": args.group_size,
+            "max_steps": args.max_steps,
+            "max_completion_length": args.max_completion_length,
+            "seed": args.seed,
+        },
+        "mode": "disabled" if not has_wandb_key else "online",
+    }
+    if wandb_entity:
+        init_kwargs["entity"] = wandb_entity
+    wandb.init(**init_kwargs)
+
+
 # -----------------------------------------------------------------------
 # Prompt dataset
 # -----------------------------------------------------------------------
@@ -178,24 +225,7 @@ async def train_grpo(args):
     os.makedirs(args.output_dir, exist_ok=True)
 
     # ---- W&B ----
-    wandb.init(
-        project=args.wandb_project,
-        name=args.wandb_run_name or f"grpo-{args.base_model.split('/')[-1]}",
-        tags=["grpo", "stage2", "rl", "tool-use"],
-        config={
-            "stage": "grpo",
-            "base_model": args.base_model,
-            "sft_checkpoint": args.sft_checkpoint,
-            "lora_rank": args.lora_rank,
-            "learning_rate": args.learning_rate,
-            "batch_size": args.batch_size,
-            "group_size": args.group_size,
-            "max_steps": args.max_steps,
-            "max_completion_length": args.max_completion_length,
-            "seed": args.seed,
-        },
-        mode="disabled" if not os.getenv("WANDB_API_KEY") else "online",
-    )
+    _init_wandb(args)
 
     # ---- Load prompt dataset ----
     logger.info("Building prompt dataset...")
@@ -441,8 +471,9 @@ async def train_grpo(args):
 
     # ---- Push to Hugging Face Hub ----
     if args.hf_repo_id:
+        repo_id = _resolve_hf_repo_id(args.hf_repo_id)
         await _push_to_hub_async(
-            repo_id=args.hf_repo_id,
+            repo_id=repo_id,
             checkpoint_dir=args.output_dir,
             base_model=args.base_model,
             sft_checkpoint=args.sft_checkpoint,
@@ -598,6 +629,8 @@ def main():
                    help="W&B project name (requires WANDB_API_KEY env var)")
     p.add_argument("--wandb-run-name", default=None,
                    help="W&B run name (auto-generated if not set)")
+    p.add_argument("--wandb-entity", default=None,
+                   help="W&B entity/team (defaults to WANDB_ENTITY env var)")
     p.add_argument("--hf-repo-id", default=None,
                    help="HF repo ID to push to (e.g., username/qwen3-grpo-tool-use). Requires HF_TOKEN env var.")
     a = p.parse_args()
