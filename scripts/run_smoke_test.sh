@@ -29,25 +29,30 @@ SFT_OUT="${SFT_OUT:-./outputs/smoke_sft}"
 GRPO_OUT="${GRPO_OUT:-./outputs/smoke_grpo}"
 
 # Mini-but-informative defaults (still cheaper than full training)
-SMOKE_DATA_SAMPLES="${SMOKE_DATA_SAMPLES:-1024}"
-EVAL_SAMPLES="${EVAL_SAMPLES:-100}"
+SMOKE_DATA_SAMPLES="${SMOKE_DATA_SAMPLES:-200}"
+EVAL_SAMPLES="${EVAL_SAMPLES:-10}"
 
-SFT_LORA_RANK="${SFT_LORA_RANK:-32}"
+# Benchmarks to run during smoke eval — schema_compliance confirms output is
+# parseable; multi_step confirms chain extraction works. Skip latency, argument
+# accuracy, and tool selection (those are quality checks, not integration checks).
+SMOKE_BENCHMARKS="${SMOKE_BENCHMARKS:-schema_compliance multi_step}"
+
+SFT_LORA_RANK="${SFT_LORA_RANK:-16}"
 SFT_LR="${SFT_LR:-2e-4}"
 SFT_BATCH_SIZE="${SFT_BATCH_SIZE:-8}"
-SFT_EPOCHS="${SFT_EPOCHS:-2}"
-SFT_MAX_SEQ_LENGTH="${SFT_MAX_SEQ_LENGTH:-1536}"
+SFT_EPOCHS="${SFT_EPOCHS:-1}"
+SFT_MAX_SEQ_LENGTH="${SFT_MAX_SEQ_LENGTH:-1024}"
 SFT_LOGGING_STEPS="${SFT_LOGGING_STEPS:-5}"
-SFT_SAVE_STEPS="${SFT_SAVE_STEPS:-20}"
+SFT_SAVE_STEPS="${SFT_SAVE_STEPS:-50}"
 
-GRPO_LORA_RANK="${GRPO_LORA_RANK:-32}"
+GRPO_LORA_RANK="${GRPO_LORA_RANK:-16}"
 GRPO_LR="${GRPO_LR:-4e-5}"
 GRPO_BATCH_SIZE="${GRPO_BATCH_SIZE:-8}"
-GRPO_GROUP_SIZE="${GRPO_GROUP_SIZE:-8}"
-GRPO_MAX_STEPS="${GRPO_MAX_STEPS:-20}"
-GRPO_MAX_COMPLETION_LENGTH="${GRPO_MAX_COMPLETION_LENGTH:-384}"
-GRPO_SAVE_STEPS="${GRPO_SAVE_STEPS:-10}"
-GRPO_LOG_SAMPLES_EVERY="${GRPO_LOG_SAMPLES_EVERY:-2}"
+GRPO_GROUP_SIZE="${GRPO_GROUP_SIZE:-4}"
+GRPO_MAX_STEPS="${GRPO_MAX_STEPS:-5}"
+GRPO_MAX_COMPLETION_LENGTH="${GRPO_MAX_COMPLETION_LENGTH:-256}"
+GRPO_SAVE_STEPS="${GRPO_SAVE_STEPS:-5}"
+GRPO_LOG_SAMPLES_EVERY="${GRPO_LOG_SAMPLES_EVERY:-5}"
 
 RESET_SMOKE_OUTPUTS="${RESET_SMOKE_OUTPUTS:-1}"
 REGENERATE_SMOKE_DATA="${REGENERATE_SMOKE_DATA:-0}"
@@ -163,6 +168,7 @@ if [[ "$STAGE" == "baseline" || "$STAGE" == "all" ]]; then
         --mode baseline \
         --base-model "$BASE_MODEL" \
         --max-samples "$EVAL_SAMPLES" \
+        --benchmarks $SMOKE_BENCHMARKS \
         --output outputs/smoke_eval_baseline.json
     _require_file "outputs/smoke_eval_baseline.json" "Baseline evaluation did not produce output"
     _require_metric "outputs/smoke_eval_baseline.json" "tool_selection_accuracy" "baseline"
@@ -205,6 +211,7 @@ if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
         --base-model "$BASE_MODEL" \
         --sft-sampler-path "$SFT_SAMPLER" \
         --max-samples "$EVAL_SAMPLES" \
+        --benchmarks $SMOKE_BENCHMARKS \
         --output outputs/smoke_eval_sft.json
     _require_file "outputs/smoke_eval_sft.json" "SFT evaluation did not produce output"
     _require_metric "outputs/smoke_eval_sft.json" "tool_selection_accuracy" "sft"
@@ -254,6 +261,7 @@ if [[ "$STAGE" == "grpo" || "$STAGE" == "all" ]]; then
         --base-model "$BASE_MODEL" \
         --grpo-sampler-path "$GRPO_SAMPLER" \
         --max-samples "$EVAL_SAMPLES" \
+        --benchmarks $SMOKE_BENCHMARKS \
         --output outputs/smoke_eval_grpo.json
     _require_file "outputs/smoke_eval_grpo.json" "GRPO evaluation did not produce output"
     _require_metric "outputs/smoke_eval_grpo.json" "tool_selection_accuracy" "grpo"

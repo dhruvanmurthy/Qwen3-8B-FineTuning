@@ -359,10 +359,6 @@ class ToolUseEvaluator:
                     self.label, status, example.expected_tool, predicted,
                     example.prompt.replace("\n", " "),
                 )
-                # DEBUG: print full raw output for first 3 examples to diagnose extraction issues
-                if total <= 3:
-                    logger.info("  [%s] RAW OUTPUT (example %d):\n%s\n--- END RAW ---",
-                                self.label, total, output)
                 sample_rows.append({
                     "prompt": example.prompt[:300],
                     "expected_tool": example.expected_tool,
@@ -545,12 +541,6 @@ class ToolUseEvaluator:
                     self.label, status, exp_names, pred_names,
                     found_count, n_exp, failure_mode,
                 )
-                if i < 5:
-                    # Full raw output so we can see format issues
-                    logger.info(
-                        "  [%s] RAW OUTPUT (multi-step example %d/%d):\n%s\n--- END ---",
-                        self.label, i + 1, len(multi_step), output,
-                    )
                 sample_rows.append({
                     "prompt": example.prompt[:300],
                     "expected_chain": str(exp_names),
@@ -620,12 +610,25 @@ class ToolUseEvaluator:
         logger.info("[%s] Latency: %.3fs (%.1f ms/token)", self.label, avg_time, ms_per_token)
         return ms_per_token
 
-    async def evaluate_all(self, examples: List[EvalExample]) -> Dict[str, float]:
-        await self.evaluate_tool_selection(examples)
-        await self.evaluate_argument_accuracy(examples)
-        await self.evaluate_schema_compliance(examples)
-        await self.evaluate_multi_step(examples)
-        await self.evaluate_latency(examples, num_samples=100)
+    async def evaluate_all(
+        self,
+        examples: List[EvalExample],
+        benchmarks: Optional[List[str]] = None,
+    ) -> Dict[str, float]:
+        """Run selected benchmarks. Pass benchmarks=[...] to run a subset."""
+        _map = {
+            "tool_selection": lambda: self.evaluate_tool_selection(examples),
+            "argument_accuracy": lambda: self.evaluate_argument_accuracy(examples),
+            "schema_compliance": lambda: self.evaluate_schema_compliance(examples),
+            "multi_step": lambda: self.evaluate_multi_step(examples),
+            "latency": lambda: self.evaluate_latency(examples, num_samples=100),
+        }
+        _all = list(_map.keys())
+        to_run = benchmarks or _all
+        for name in to_run:
+            if name not in _map:
+                raise ValueError(f"Unknown benchmark '{name}'. Choose from: {_all}")
+            await _map[name]()
         # Log all aggregate metrics to W&B summary for this stage
         for k, v in self.results.items():
             wandb.summary[f"{self.label}/{k}"] = v
@@ -707,6 +710,14 @@ def main():
                         help="Local dir containing GRPO checkpoints.jsonl (auto-detect fallback)")
     parser.add_argument("--output", default="outputs/evaluation_results.json")
     parser.add_argument("--max-samples", type=int, default=1000)
+    parser.add_argument(
+        "--benchmarks",
+        nargs="+",
+        default=None,
+        metavar="BENCHMARK",
+        help="Subset of benchmarks to run: tool_selection argument_accuracy "
+             "schema_compliance multi_step latency. Default: all.",
+    )
     args = parser.parse_args()
 
     asyncio.run(_run_eval(args))
@@ -777,19 +788,19 @@ async def _run_eval(args) -> None:
     if args.mode in ("baseline", "compare", "all"):
         logger.info(">>> Baseline evaluation")
         ev = await _make_evaluator("baseline")
-        all_results["baseline"] = await ev.evaluate_all(examples)
+        all_results["baseline"] = await ev.evaluate_all(examples, benchmarks=args.benchmarks)
 
     # --- SFT ---
     if args.mode in ("sft", "compare", "all"):
         logger.info(">>> SFT evaluation  (sampler: %s)", sft_sampler)
         ev = await _make_evaluator("sft", model_path=sft_sampler)
-        all_results["sft"] = await ev.evaluate_all(examples)
+        all_results["sft"] = await ev.evaluate_all(examples, benchmarks=args.benchmarks)
 
     # --- GRPO ---
     if args.mode in ("grpo", "compare", "all"):
         logger.info(">>> GRPO evaluation  (sampler: %s)", grpo_sampler)
         ev = await _make_evaluator("grpo", model_path=grpo_sampler)
-        all_results["grpo"] = await ev.evaluate_all(examples)
+        all_results["grpo"] = await ev.evaluate_all(examples, benchmarks=args.benchmarks)
 
     # --- comparison table ---
     if len(all_results) > 1:

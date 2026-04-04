@@ -33,6 +33,7 @@ BASE_MODEL="${BASE_MODEL:-Qwen/Qwen3-8B}"
 SFT_OUTPUT="${SFT_OUTPUT:-./outputs/sft}"
 GRPO_OUTPUT="${GRPO_OUTPUT:-./outputs/grpo}"
 EVAL_SAMPLES="${EVAL_SAMPLES:-1000}"
+BENCHMARK_FILTER="${BENCHMARK_FILTER:-}"
 
 SFT_LORA_RANK="${SFT_LORA_RANK:-64}"
 GRPO_LORA_RANK="${GRPO_LORA_RANK:-$SFT_LORA_RANK}"
@@ -130,6 +131,15 @@ if [ -n "$HF_REPO_ID" ]; then echo "  HF repo ID      : $HF_REPO_ID"; fi
 echo "============================================="
 
 # --------------------------------------------------
+# Pre-flight: ensure synthetic data exists
+# (needed by all eval stages, not just SFT)
+# --------------------------------------------------
+if [ ! -d "data/raw/synthetic" ] || [ -z "$(ls data/raw/synthetic/*.jsonl 2>/dev/null)" ]; then
+    echo ">>> Generating synthetic training data..."
+    python3 scripts/generate_synthetic.py
+fi
+
+# --------------------------------------------------
 # Stage 0 — Baseline evaluation
 # --------------------------------------------------
 if [[ "$STAGE" == "baseline" || "$STAGE" == "all" ]]; then
@@ -142,7 +152,8 @@ if [[ "$STAGE" == "baseline" || "$STAGE" == "all" ]]; then
             --mode baseline \
             --base-model "$BASE_MODEL" \
             --max-samples "$EVAL_SAMPLES" \
-            --output outputs/eval_baseline.json
+            --output outputs/eval_baseline.json \
+            ${BENCHMARK_FILTER:+--benchmarks $BENCHMARK_FILTER}
     fi
 fi
 
@@ -152,12 +163,6 @@ fi
 if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
     echo ""
     echo ">>> Stage 1: SFT Training (Tinker)"
-
-    # Generate synthetic data if not present
-    if [ ! -d "data/raw/synthetic" ] || [ -z "$(ls data/raw/synthetic/*.jsonl 2>/dev/null)" ]; then
-        echo ">>> Generating synthetic training data..."
-        python3 scripts/generate_synthetic.py
-    fi
 
     python3 src/train.py \
         --base-model "$BASE_MODEL" \
@@ -188,7 +193,8 @@ if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
                 --base-model "$BASE_MODEL" \
                 --sft-sampler-path "$SFT_SAMPLER" \
                 --max-samples "$EVAL_SAMPLES" \
-                --output outputs/eval_sft.json
+                --output outputs/eval_sft.json \
+                ${BENCHMARK_FILTER:+--benchmarks $BENCHMARK_FILTER}
         fi
     fi
 fi
@@ -233,7 +239,8 @@ if [[ "$STAGE" == "grpo" || "$STAGE" == "all" ]]; then
                 --base-model "$BASE_MODEL" \
                 --grpo-sampler-path "$GRPO_SAMPLER" \
                 --max-samples "$EVAL_SAMPLES" \
-                --output outputs/eval_grpo.json
+                --output outputs/eval_grpo.json \
+                ${BENCHMARK_FILTER:+--benchmarks $BENCHMARK_FILTER}
         fi
     fi
 fi
@@ -256,7 +263,8 @@ if [[ "$STAGE" == "compare" || "$STAGE" == "all" ]]; then
             ${SFT_SAMPLER:+--sft-sampler-path "$SFT_SAMPLER"} \
             ${GRPO_SAMPLER:+--grpo-sampler-path "$GRPO_SAMPLER"} \
             --max-samples "$EVAL_SAMPLES" \
-            --output outputs/eval_comparison.json
+            --output outputs/eval_comparison.json \
+            ${BENCHMARK_FILTER:+--benchmarks $BENCHMARK_FILTER}
     fi
 fi
 

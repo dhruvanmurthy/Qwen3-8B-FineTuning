@@ -60,10 +60,33 @@ def extract_tool_call(text: str) -> Optional[Dict]:
 
 
 def extract_tool_calls(text: str) -> List[Dict]:
-    """Extract all tool calls from a multi-step completion."""
+    """Extract all tool calls from a multi-step completion.
+
+    Tries <tool_call>...</tool_call> blocks first (handles pretty-printed
+    nested JSON that the flat brace regex can't match), then falls back to
+    scanning for flat JSON objects as a best-effort catch-all.
+    """
+    # Strip thinking blocks
+    text_clean = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    text_clean = re.sub(r'<think>.*$', '', text_clean, flags=re.DOTALL)
+
     calls = []
+
+    # Primary: <tool_call> ... </tool_call> blocks (model's native format)
+    for block in re.finditer(r'<tool_call>\s*(.*?)\s*</tool_call>', text_clean, re.DOTALL):
+        try:
+            data = json.loads(block.group(1))
+            if "name" in data:
+                calls.append(data)
+        except json.JSONDecodeError:
+            continue
+
+    if calls:
+        return calls
+
+    # Fallback: scan for flat single-line JSON objects with "name" key
     for match in re.finditer(
-        r'\{[^{}]*"name"\s*:\s*"[^"]+?"[^{}]*\}', text, re.DOTALL
+        r'\{[^{}]*"name"\s*:\s*"[^"]+?"[^{}]*\}', text_clean, re.DOTALL
     ):
         try:
             data = json.loads(match.group())
