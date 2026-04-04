@@ -7,7 +7,7 @@
 #
 # Training runs on Tinker's remote GPUs — no local GPU required.
 # Requires: TINKER_API_KEY environment variable.
-# Recommended: WANDB_API_KEY and HF_TOKEN for logging and Hub pushes.
+# Recommended: WANDB_API_KEY and HF_TOKEN for logging and Hub uploads.
 #
 # Usage:
 #   bash scripts/run_pipeline.sh           # run everything

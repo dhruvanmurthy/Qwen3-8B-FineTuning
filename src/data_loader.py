@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import yaml
-from datasets import Dataset, DatasetDict, concatenate_datasets, load_dataset
+from datasets import Dataset, DatasetDict, concatenate_datasets
 
 from constants import TOOL_USE_SYSTEM_PROMPT
 
@@ -26,7 +26,6 @@ class ToolUseDataLoader:
         with open(config_path) as f:
             self.config = yaml.safe_load(f)
 
-        self.cache_dir = self.config.get("cache_dir", "./hf_cache")
         self.seed = self.config.get("seed", 42)
 
     def load_all_datasets(self) -> Dataset:
@@ -54,13 +53,13 @@ class ToolUseDataLoader:
             except Exception as exc:
                 logger.warning(
                     f"⚠ Skipping {source_name}: {exc}. "
-                    "Check HF access / network / local path and rerun if needed."
+                    "Check local path and rerun if needed."
                 )
 
         if not datasets:
             raise RuntimeError(
                 "No datasets were successfully loaded. "
-                "Check HF_TOKEN, network connectivity, and data/raw/synthetic/ contents."
+                "Run 'python scripts/generate_synthetic.py' to create synthetic data first."
             )
 
         # Concatenate
@@ -70,91 +69,11 @@ class ToolUseDataLoader:
         return combined
 
     def load_single_dataset(self, name: str, config: Dict) -> Dataset:
-        """Load a single dataset from HF or local path."""
-        if config["type"] == "huggingface":
-            return self._load_from_hub(config)
-        elif config["type"] == "local":
+        """Load a single dataset from local path."""
+        if config["type"] == "local":
             return self._load_from_local(config)
         else:
-            raise ValueError(f"Unknown dataset type: {config['type']}")
-
-    def _load_from_hub(self, config: Dict) -> Dataset:
-        """Load dataset from Hugging Face Hub."""
-        url = config["url"]
-        split = config.get("split", "train")
-        dataset_config = config.get("config", None)
-        samples = config.get("samples", None)
-        data_files = config.get("data_files", None)
-
-        logger.info(f"Loading {url} ({split})...")
-
-        hf_token = os.getenv("HF_TOKEN") or None
-
-        kwargs = dict(
-            cache_dir=self.cache_dir,
-            token=hf_token,
-        )
-        if data_files:
-            kwargs["data_files"] = data_files
-        if dataset_config:
-            args = (url, dataset_config)
-        else:
-            args = (url,)
-
-        try:
-            dataset = load_dataset(*args, split=split, **kwargs)
-        except Exception as first_err:
-            # Fallback for mixed-schema JSON: load each file individually
-            # via pandas which is more lenient, then combine.
-            if data_files:
-                logger.info(
-                    f"Default loader failed ({first_err}); "
-                    "falling back to per-file pandas load..."
-                )
-                dataset = self._load_files_via_pandas(url, data_files, hf_token)
-            else:
-                raise first_err
-
-        # Limit samples
-        if samples and len(dataset) > samples:
-            indices = np.random.choice(len(dataset), samples, replace=False)
-            dataset = dataset.select(indices)
-
-        logger.info(f"Loaded {len(dataset)} examples from {url}")
-        return dataset
-
-    def _load_files_via_pandas(
-        self, repo_id: str, data_files: List[str], token: str | None
-    ) -> Dataset:
-        """Download individual files from a HF dataset repo and load via
-        pandas to tolerate mixed-schema JSON fields."""
-        import pandas as pd
-        from huggingface_hub import hf_hub_download
-
-        frames = []
-        for fname in data_files:
-            local = hf_hub_download(
-                repo_id=repo_id,
-                filename=fname,
-                repo_type="dataset",
-                cache_dir=self.cache_dir,
-                token=token,
-            )
-            # Read as line-delimited JSON (each line is one object)
-            try:
-                df = pd.read_json(local, lines=True)
-            except ValueError:
-                # Some files are regular JSON arrays
-                df = pd.read_json(local)
-            frames.append(df)
-
-        combined = pd.concat(frames, ignore_index=True)
-        # Convert every column to string to avoid Arrow type conflicts
-        for col in combined.columns:
-            combined[col] = combined[col].apply(
-                lambda v: json.dumps(v) if isinstance(v, (dict, list)) else str(v)
-            )
-        return Dataset.from_pandas(combined, preserve_index=False)
+            raise ValueError(f"Unknown dataset type: {config['type']}. Only 'local' is supported.")
 
     def _load_from_local(self, config: Dict) -> Dataset:
         """Load dataset from local JSONL/JSON files."""
@@ -268,9 +187,6 @@ class ToolUseDataLoader:
 
         Handles:
           - Already has 'text' column → keep as-is
-          - ToolBench 'conversations' (list of {from, value}) → render chat
-          - APIBench 'api_call' + 'domain' → render tool call
-          - BFCL 'question' + 'function' → render function call
           - Messages [{role, content}] → render chat
           - Fallback: JSON-dump entire row
         """
@@ -281,69 +197,7 @@ class ToolUseDataLoader:
             if example.get("text"):
                 return example
 
-            # 2. ToolBench conversations: dict with 'from'/'value' or list of turns
-            if example.get("conversations"):
-                convs = example["conversations"]
-                if isinstance(convs, dict) and "from" in convs and "value" in convs:
-                    parts = []
-                    for role, val in zip(convs["from"], convs["value"]):
-                        parts.append(f"{role}: {val}")
-                    example["text"] = "\n".join(parts)
-                    return example
-                if isinstance(convs, list):
-                    parts = []
-                    for turn in convs:
-                        r = turn.get("from", turn.get("role", ""))
-                        v = turn.get("value", turn.get("content", ""))
-                        parts.append(f"{r}: {v}")
-                    example["text"] = "\n".join(parts)
-                    return example
-
-            # 3. ToolBench benchmark: query + api_list + relevant_apis
-            if example.get("query") and example.get("api_list"):
-                parts = [f"query: {example['query']}"]
-                api_list = example["api_list"]
-                if isinstance(api_list, str):
-                    parts.append(f"api_list: {api_list}")
-                else:
-                    parts.append(f"api_list: {json.dumps(api_list, default=str)}")
-                if example.get("relevant_apis"):
-                    ra = example["relevant_apis"]
-                    if isinstance(ra, str):
-                        parts.append(f"relevant_apis: {ra}")
-                    else:
-                        parts.append(f"relevant_apis: {json.dumps(ra, default=str)}")
-                example["text"] = "\n".join(parts)
-                return example
-
-            # 4. APIBench: domain + api_call + optional api_data
-            if example.get("api_call"):
-                parts = []
-                if example.get("domain"):
-                    parts.append(f"domain: {example['domain']}")
-                parts.append(f"api_call: {example['api_call']}")
-                if example.get("api_data"):
-                    api_data = example["api_data"]
-                    if isinstance(api_data, str):
-                        parts.append(f"api_data: {api_data}")
-                    else:
-                        parts.append(f"api_data: {json.dumps(api_data)}")
-                example["text"] = "\n".join(parts)
-                return example
-
-            # 5. BFCL: question + function list
-            if example.get("question"):
-                parts = [f"question: {json.dumps(example['question'], default=str)}"]
-                if example.get("function"):
-                    fn = example["function"]
-                    if isinstance(fn, str):
-                        parts.append(f"function: {fn}")
-                    else:
-                        parts.append(f"function: {json.dumps(fn, default=str)}")
-                example["text"] = "\n".join(parts)
-                return example
-
-            # 6. messages list [{role, content}]
+            # 2. messages list [{role, content}]
             if isinstance(example.get("messages"), list):
                 parts = []
                 for msg in example["messages"]:
@@ -353,12 +207,12 @@ class ToolUseDataLoader:
                 example["text"] = "\n".join(parts)
                 return example
 
-            # 7. instruction field
+            # 3. instruction field
             if example.get("instruction"):
                 example["text"] = example["instruction"]
                 return example
 
-            # 8. Fallback: dump all non-null fields
+            # 4. Fallback: dump all non-null fields
             example["text"] = json.dumps(
                 {k: v for k, v in example.items()
                  if k != "source" and v is not None},

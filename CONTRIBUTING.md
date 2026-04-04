@@ -25,11 +25,10 @@ Welcome to the Qwen3-8B Fine-tuning project! This guide explains how to contribu
 ### 1. New Datasets
 Add support for more tool-use datasets:
 - [ ] Markbench
-- [ ] APIBench
 - [ ] Custom domain datasets
 
 **How to contribute**:
-1. Add dataset loading logic in `src/data_loader.py`
+1. Add dataset loading logic to `scripts/generate_synthetic.py` or a new generator script
 2. Update `configs/dataset_config.yaml`
 3. Add example in `DATASET_CARD.md`
 4. Create PR with test dataset

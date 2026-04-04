@@ -28,7 +28,6 @@ pip install -r requirements.txt
 cp .env.example .env
 
 # Edit .env with your credentials:
-#   HF_TOKEN=<your_token>
 #   WANDB_API_KEY=<your_key>
 ```
 
@@ -172,12 +171,21 @@ python src/evaluate.py \
 
 Output: markdown table showing Baseline vs SFT vs GRPO across all metrics.
 
-## Phase 8: Publish & Cleanup
+## Phase 8: Publish to Hugging Face Hub
 
-### Push to Hugging Face Hub
+### Push trained adapters
 ```bash
-huggingface-cli upload dhruvanmurthy/qwen3-8b-tool-use-sft-lora outputs/sft/final_adapter
-huggingface-cli upload dhruvanmurthy/qwen3-8b-tool-use-grpo-lora outputs/grpo/final_adapter
+# SFT adapter
+huggingface-cli upload dhruvanmurthy/qwen3-8b-tool-use-sft-lora outputs/sft/
+# GRPO adapter
+huggingface-cli upload dhruvanmurthy/qwen3-8b-tool-use-grpo-lora outputs/grpo/
+```
+
+### Push synthetic dataset
+```bash
+python scripts/push_dataset_to_hub.py \
+  --data-dir data/raw/synthetic \
+  --repo-id dhruvanmurthy/qwen3-8b-synthetic-tool-use
 ```
 
 ## One-Command Full Pipeline

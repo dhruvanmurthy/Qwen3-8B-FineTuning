@@ -2,45 +2,6 @@
 # Defines dataset sources, paths, and preprocessing parameters
 
 sources:
-  api_bank:
-    enabled: true
-    name: "API-Bank"
-    url: "gorilla-llm/APIBench"
-    type: "huggingface"
-    split: "train"
-    samples: 5000
-    config: null
-    weight: 1.0
-    data_files:
-      - "torchhub_train.json"
-      - "huggingface_train.json"
-      - "tensorflow_train.json"
-    description: "Real API orchestration with execution results"
-
-  toolbench:
-    enabled: true
-    name: "ToolBench"
-    url: "tuandunghcmut/toolbench-v1"
-    type: "huggingface"
-    split: "g1_instruction"
-    config: "benchmark"
-    samples: 15000
-    weight: 1.0
-    description: "Tool selection and chaining from large catalogs"
-
-  gorilla:
-    enabled: true
-    name: "Gorilla"
-    url: "gorilla-llm/Berkeley-Function-Calling-Leaderboard"
-    type: "huggingface"
-    split: "train"
-    config: null
-    samples: 5000
-    weight: 1.0
-    data_files:
-      - "BFCL_v3_live_simple.json"
-    description: "Function calling with parameter correctness focus"
-
   synthetic:
     enabled: true
     name: "Synthetic"
@@ -84,15 +45,8 @@ undersample_majority_tools: false
 majority_tool_ratio: 0.05  # Keep only 5% of most common tools
 
 # Output
-output_format: "huggingface"  # or "jsonl", "parquet"
+output_format: "jsonl"
 output_dir: "./data/processed"
-push_to_hub: false
-hub_dataset_id: "dhruvanmurthy/qwen3-8b-tool-use"
-hub_private: false
-
-# Caching
-cache_dir: "./hf_cache"
-use_auth_token: true
 
 # Logging
 log_level: "info"

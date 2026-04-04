@@ -19,7 +19,7 @@ A final **compare** step prints a side-by-side table of all three stages.
 ### 1. Tool Selection Accuracy
 
 **Metric**: Percentage of correct tool selections from available options
-**Test Set**: API-Bank + ToolBench test splits
+**Test Set**: Synthetic held-out split (10%)
 **Target**: Baseline ~65%, SFT ~85%, GRPO >90%
 
 Each test example provides a query and a list of available tools. The evaluator
@@ -28,7 +28,7 @@ generates a response and checks whether the first tool call matches the expected
 ### 2. Argument Generation Accuracy
 
 **Metric**: F1 score for argument names and values
-**Test Set**: Gorilla test split
+**Test Set**: Synthetic held-out split
 **Target**: Baseline ~50%, SFT ~75%, GRPO >85%
 
 Compares predicted argument key-value pairs against expected ones using set-based
@@ -45,7 +45,7 @@ structure, required fields present, types correct).
 ### 4. Multi-Step Success Rate
 
 **Metric**: End-to-end success of 2-3 step tool chains
-**Test Set**: API-Bank multi-step examples
+**Test Set**: Synthetic multi-step held-out examples
 **Target**: Baseline ~40%, SFT ~70%, GRPO >80%
 
 ### 5. Latency
@@ -251,7 +251,7 @@ jobs:
         run: |
           python src/evaluate.py \
             --model outputs/model_final \
-            --datasets api-bank,toolbench,gorilla \
+            --datasets synthetic \
             --output results.json
       - name: Upload to W&B
         env:
@@ -269,11 +269,8 @@ jobs:
 
 | Component | Cost |
 |-----------|------|
-| API-Bank test (500 ex) | ~$1 |
-| ToolBench test (1k ex) | ~$2 |
-| Gorilla test (500 ex) | ~$1 |
-| Adversarial test (500 ex) | ~$1 |
-| **Total** | **~$5** |
+| Synthetic test set (~1,228 ex) | ~$2 |
+| **Total** | **~$2** |
 
 Run evaluations frequently (low cost!)
 
@@ -284,7 +281,7 @@ Run evaluations frequently (low cost!)
    ```bash
    python src/evaluate.py \
      --model dhruvanmurthy/qwen3-8b-tool-use-lora \
-     --datasets api-bank,toolbench,gorilla
+     --datasets synthetic
    ```
 3. Compare against baselines
 4. Iterate on training hyperparameters based on results

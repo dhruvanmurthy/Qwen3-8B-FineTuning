@@ -7,8 +7,114 @@ on:
     branches: [ main, develop ]
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+
+    - name: Install lint tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install black==24.3.0 flake8==7.0.0 isort==5.13.2 mypy==1.9.0 \
+                    types-PyYAML==6.0.12 types-requests==2.31.0
+
+    - name: Format check (black)
+      run: black --check src/ scripts/
+
+    - name: Lint (flake8 — errors only)
+      run: flake8 src/ scripts/ --count --select=E9,F63,F7,F82 --show-source --statistics
+
+    - name: Import order check (isort)
+      run: isort --check-only src/ scripts/
+
+    - name: Type check (mypy)
+      run: mypy src/ --ignore-missing-imports || true
+
+  synthetic-data:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+
+    - name: Install data-generation dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install numpy==1.26.4
+
+    - name: Generate synthetic dataset
+      run: |
+        python scripts/generate_synthetic.py \
+          --num-samples 200 \
+          --seed 42 \
+          --output-dir data/raw/synthetic
+
+    - name: Verify output files
+      run: |
+        python - <<'EOF'
+        import json
+        from pathlib import Path
+
+        single = Path("data/raw/synthetic/synthetic_single.jsonl")
+        multi  = Path("data/raw/synthetic/synthetic_multistep.jsonl")
+
+        assert single.exists(), f"Missing: {single}"
+        assert multi.exists(),  f"Missing: {multi}"
+
+        for path in (single, multi):
+            rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+            assert rows, f"Empty file: {path}"
+            for row in rows:
+                assert "instruction"  in row, f"Missing 'instruction' in {path}"
+                assert "tool_calls"   in row, f"Missing 'tool_calls' in {path}"
+                assert "text"         in row, f"Missing 'text' in {path}"
+                assert row["tool_calls"], "tool_calls must be non-empty"
+
+        total = sum(
+            len([l for l in p.read_text().splitlines() if l.strip()])
+            for p in (single, multi)
+        )
+        assert total == 200, f"Expected 200 examples, got {total}"
+        print(f"✓ {total} examples validated ({single.name}: "
+              f"{sum(1 for l in single.read_text().splitlines() if l.strip())}, "
+              f"{multi.name}: {sum(1 for l in multi.read_text().splitlines() if l.strip())})")
+        EOF
+
+  push-dataset-script:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+
+    - name: Install upload dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install huggingface-hub>=0.23.2
+
+    - name: Syntax-check push_dataset_to_hub.py
+      run: python -m py_compile scripts/push_dataset_to_hub.py && echo "✓ No syntax errors"
+
+    - name: Dry-run help (no HF_TOKEN required)
+      run: python scripts/push_dataset_to_hub.py --help
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    # Lightweight unit tests that don't require Tinker or GPU
     strategy:
       matrix:
         python-version: ["3.10", "3.11"]
@@ -21,40 +127,18 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
-    - name: Install dependencies
+    - name: Install test dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pytest pytest-cov black flake8
+        pip install datasets==2.21.0 numpy==1.26.4 pyyaml==6.0.1 \
+                    python-dotenv==1.0.0 pytest==7.4.4 pytest-cov==4.1.0 \
+                    pytest-asyncio==0.23.3 huggingface-hub>=0.23.2
 
-    - name: Format check with black
-      run: black --check src/
-
-    - name: Lint with flake8
-      run: flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
-
-    - name: Run pytest
+    - name: Run unit tests (if any)
       run: |
-        pytest tests/ -v --cov=src/ --cov-report=term-only
-
-  linting:
-    runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v3
-
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: "3.11"
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install isort black flake8 mypy
-
-    - name: Check imports with isort
-      run: isort --check-only src/
-
-    - name: Type check with mypy
-      run: mypy src/ --ignore-missing-imports || true
+        if [ -d tests/ ] && [ "$(find tests/ -name '*.py' | head -1)" ]; then
+          pytest tests/ -v --cov=src/ --cov-report=term-only \
+            --ignore=tests/integration
+        else
+          echo "No unit tests found — skipping."
+        fi

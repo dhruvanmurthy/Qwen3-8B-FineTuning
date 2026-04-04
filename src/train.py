@@ -28,7 +28,6 @@ from tinker_cookbook.supervised import conversation_to_datum
 from tinker_cookbook.model_info import get_recommended_renderer_name
 from tinker_cookbook.checkpoint_utils import save_checkpoint_async, get_last_checkpoint
 
-from data_loader import ToolUseDataLoader
 from constants import TOOL_USE_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -121,7 +120,6 @@ def _init_wandb(args) -> None:
             "num_epochs": args.num_epochs,
             "max_seq_length": args.max_seq_length,
             "seed": args.seed,
-            "include_hf_data": args.include_hf_data,
         },
         "mode": "disabled" if not has_wandb_key else "online",
     }
@@ -199,34 +197,6 @@ def _example_to_conversation(example: Dict) -> Optional[List[Dict]]:
     ]
 
 
-def load_text_data_as_conversations(
-    dataset_config: str = "configs/dataset_config.yaml",
-) -> List[List[Dict]]:
-    """Load HF/other datasets via data_loader, normalize to text,
-    and wrap as single-turn conversations for SFT."""
-    try:
-        loader = ToolUseDataLoader(dataset_config)
-        dataset = loader.load_all_datasets()
-        dataset = loader._normalize_to_text(dataset)
-        dataset = loader.preprocess(dataset)
-    except Exception as e:
-        logger.warning("Failed to load HF datasets: %s", e)
-        return []
-
-    conversations = []
-    for example in dataset:
-        text = example.get("text", "")
-        if not text:
-            continue
-        # Wrap as a single-message conversation (train on full text)
-        conversations.append([
-            {"role": "system", "content": TOOL_USE_SYSTEM_PROMPT},
-            {"role": "user", "content": text},
-        ])
-
-    logger.info("Loaded %d text-based conversations from HF datasets", len(conversations))
-    return conversations
-
 
 # -----------------------------------------------------------------------
 # Training
@@ -248,8 +218,6 @@ async def train_sft(args):
     # ---- Load conversations ----
     logger.info("Loading training data...")
     conversations = load_synthetic_conversations(args.synthetic_data_dir)
-    if args.include_hf_data:
-        conversations += load_text_data_as_conversations(args.dataset_config)
 
     if not conversations:
         raise RuntimeError("No training data found. Run scripts/generate_synthetic.py first.")
@@ -436,14 +404,7 @@ async def _push_to_hub_async(
     base_model: str,
     training_config: Dict,
 ) -> None:
-    """Push trained adapter to Hugging Face Hub.
-
-    Args:
-        repo_id: HF repo ID (e.g., "username/qwen3-sft-tool-use")
-        checkpoint_dir: Local path to saved adapter
-        base_model: Base model ID for documentation
-        training_config: Dict with training hyperparameters
-    """
+    """Push trained SFT adapter to Hugging Face Hub."""
     try:
         hf_token = os.getenv("HF_TOKEN")
         if not hf_token:
@@ -453,7 +414,6 @@ async def _push_to_hub_async(
         logger.info("Pushing adapter to Hugging Face Hub: %s", repo_id)
         api = HfApi(token=hf_token)
 
-        # Create repo if it doesn't exist
         try:
             api.repo_info(repo_id=repo_id, repo_type="model")
             logger.info("Repo %s already exists", repo_id)
@@ -461,7 +421,6 @@ async def _push_to_hub_async(
             logger.info("Creating new repo: %s", repo_id)
             create_repo(repo_id=repo_id, repo_type="model", private=False, exist_ok=True)
 
-        # Create README
         readme_content = f"""---
 license: mit
 library_name: peft
@@ -469,7 +428,7 @@ library_name: peft
 
 # {repo_id}
 
-LoRA adapter for Qwen3-8B tool-use fine-tuning.
+LoRA adapter for Qwen3-8B tool-use fine-tuning (SFT stage).
 
 ## Model Details
 
@@ -485,30 +444,14 @@ LoRA adapter for Qwen3-8B tool-use fine-tuning.
 {json.dumps(training_config, indent=2)}
 ```
 
-## How to Use
-
-```python
-from peft import PeftModel
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-base_model_id = "{base_model}"
-model = AutoModelForCausalLM.from_pretrained(base_model_id, load_in_4bit=True)
-model = PeftModel.from_pretrained(model, "{repo_id}")
-tokenizer = AutoTokenizer.from_pretrained(base_model_id)
-```
-
 ## License
 
 MIT
 """
-        # Write README to checkpoint dir
         readme_path = Path(checkpoint_dir) / "README.md"
         with open(readme_path, "w") as f:
             f.write(readme_content)
-        logger.info("Created README at %s", readme_path)
 
-        # Upload checkpoint directory
-        logger.info("Uploading checkpoint directory...")
         upload_folder(
             repo_id=repo_id,
             folder_path=checkpoint_dir,
@@ -518,8 +461,6 @@ MIT
         logger.info("✓ Successfully pushed to %s", repo_id)
         hub_url = f"https://huggingface.co/{repo_id}"
         logger.info("View at: %s", hub_url)
-
-        # Log to W&B
         wandb.log({"hf_hub_url": hub_url})
         wandb.config.update({"hf_repo_id": repo_id})
 
@@ -564,9 +505,6 @@ def main():
     p.add_argument("--renderer-name", default="qwen3",
                    help="Fallback renderer name if auto-detect fails")
     p.add_argument("--synthetic-data-dir", default="./data/raw/synthetic")
-    p.add_argument("--dataset-config", default="configs/dataset_config.yaml")
-    p.add_argument("--include-hf-data", action="store_true", default=False,
-                   help="Also load HF datasets (APIBench, ToolBench, etc.)")
     p.add_argument("--output-dir", default="./outputs/sft")
     p.add_argument("--lora-rank", type=int, default=64)
     p.add_argument("--learning-rate", type=float, default=2e-4)

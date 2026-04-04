@@ -590,15 +590,7 @@ async def _push_to_hub_async(
     sft_checkpoint: str,
     training_config: dict,
 ) -> None:
-    """Push trained GRPO adapter to Hugging Face Hub.
-
-    Args:
-        repo_id: HF repo ID (e.g., "username/qwen3-grpo-tool-use")
-        checkpoint_dir: Local path to saved adapter
-        base_model: Base model ID for documentation
-        sft_checkpoint: Path to SFT checkpoint used as foundation
-        training_config: Dict with training hyperparameters and metrics
-    """
+    """Push trained GRPO adapter to Hugging Face Hub."""
     try:
         hf_token = os.getenv("HF_TOKEN")
         if not hf_token:
@@ -608,7 +600,6 @@ async def _push_to_hub_async(
         logger.info("Pushing GRPO adapter to Hugging Face Hub: %s", repo_id)
         api = HfApi(token=hf_token)
 
-        # Create repo if it doesn't exist
         try:
             api.repo_info(repo_id=repo_id, repo_type="model")
             logger.info("Repo %s already exists", repo_id)
@@ -616,7 +607,6 @@ async def _push_to_hub_async(
             logger.info("Creating new repo: %s", repo_id)
             create_repo(repo_id=repo_id, repo_type="model", private=False, exist_ok=True)
 
-        # Create README
         readme_content = f"""---
 license: mit
 library_name: peft
@@ -639,39 +629,17 @@ LoRA adapter for Qwen3-8B tool-use GRPO (Group Relative Policy Optimization).
 ## Training Configuration
 
 ```json
-{json.dumps({k: v for k, v in training_config.items() if k != 'final_reward'}, indent=2)}
+{json.dumps({{k: v for k, v in training_config.items() if k != 'final_reward'}}, indent=2)}
 ```
-
-## How to Use
-
-```python
-from peft import PeftModel
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-base_model_id = "{base_model}"
-model = AutoModelForCausalLM.from_pretrained(base_model_id, load_in_4bit=True)
-model = PeftModel.from_pretrained(model, "{repo_id}")
-tokenizer = AutoTokenizer.from_pretrained(base_model_id)
-```
-
-## Notes
-
-- This is a stage-2 (GRPO) adapter trained on top of the SFT stage.
-- For inference, load the base model and apply this adapter.
-- Merge with base weights for faster inference if needed.
 
 ## License
 
 MIT
 """
-        # Write README to checkpoint dir
         readme_path = Path(checkpoint_dir) / "README.md"
         with open(readme_path, "w") as f:
             f.write(readme_content)
-        logger.info("Created README at %s", readme_path)
 
-        # Upload checkpoint directory
-        logger.info("Uploading checkpoint directory...")
         upload_folder(
             repo_id=repo_id,
             folder_path=checkpoint_dir,
@@ -681,8 +649,6 @@ MIT
         logger.info("✓ Successfully pushed to %s", repo_id)
         hub_url = f"https://huggingface.co/{repo_id}"
         logger.info("View at: %s", hub_url)
-
-        # Log to W&B
         wandb.log({"hf_hub_url": hub_url})
         wandb.config.update({"hf_repo_id": repo_id})
 

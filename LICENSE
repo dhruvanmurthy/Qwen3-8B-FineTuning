@@ -24,22 +24,7 @@ SOFTWARE.
 
 DATASET ATTRIBUTION & LICENSES:
 
-1. APIBench
-   - URL: https://huggingface.co/datasets/gorilla-llm/APIBench
-   - License: CC BY 4.0
-   - Citation: Xu et al., "API-Bank: A Comprehensive Benchmark for Tool-Augmented LLMs", 2023
-
-2. ToolBench
-   - URL: https://huggingface.co/datasets/tuandunghcmut/toolbench-v1
-   - License: Apache 2.0
-   - Citation: Qin et al., "ToolBench: A Benchmark for Language Models on Tool Use", 2023
-
-3. Gorilla BFCL (Berkeley Function-Calling Leaderboard)
-   - URL: https://huggingface.co/datasets/gorilla-llm/Berkeley-Function-Calling-Leaderboard
-   - License: MIT
-   - Citation: Patil et al., "Gorilla: Large Language Model Connected to Large Tools", 2023
-
-4. Synthetic Data
+1. Synthetic Data
    - Generated via scripts/generate_synthetic.py (template-based)
    - License: CC BY 4.0
    - Source: Custom generation with deterministic seed

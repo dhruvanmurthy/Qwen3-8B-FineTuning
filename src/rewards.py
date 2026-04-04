@@ -24,14 +24,20 @@ def extract_tool_call(text: str) -> Optional[Dict]:
       - <tool_call> XML tags
       - Qwen <|function_call|> format
       - Raw JSON with "name" key
+    
+    Also strips thinking tags to improve extraction from reasoning outputs.
     """
+    # Strip thinking blocks (complete and incomplete) if present
+    text_clean = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    text_clean = re.sub(r'<think>.*$', '', text_clean, flags=re.DOTALL)
+    
     patterns = [
         r'```(?:json)?\s*(\{.*?\})\s*```',
         r'<tool_call>\s*(\{.*?\})\s*</tool_call>',
         r'<\|function_call\|>\s*(\{.*?\})',
     ]
     for pattern in patterns:
-        match = re.search(pattern, text, re.DOTALL)
+        match = re.search(pattern, text_clean, re.DOTALL)
         if match:
             try:
                 data = json.loads(match.group(1))
@@ -42,7 +48,7 @@ def extract_tool_call(text: str) -> Optional[Dict]:
 
     # Fallback: find any JSON object with "name" key
     for match in re.finditer(
-        r'\{[^{}]*"name"\s*:\s*"[^"]+?"[^{}]*\}', text, re.DOTALL
+        r'\{[^{}]*"name"\s*:\s*"[^"]+?"[^{}]*\}', text_clean, re.DOTALL
     ):
         try:
             data = json.loads(match.group())

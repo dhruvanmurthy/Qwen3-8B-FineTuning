@@ -49,14 +49,16 @@ cp .env.example .env
 Edit `.env`:
 ```dotenv
 HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxxx
+HF_USER=your_hf_username
+HF_REPO_ID=qwen3-8b-tool-use-lora
 WANDB_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxx
 WANDB_PROJECT=qwen3-8b-tool-use
 TINKER_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-Login to both services:
+Login to services:
 ```bash
-huggingface-cli login
+huggingface-cli login   # optional — HF_TOKEN in .env is sufficient
 wandb login
 ```
 
@@ -105,7 +107,7 @@ print(f'Columns:    {ds[\"train\"].column_names}')
 "
 ```
 
-**Expected**: ~3,043 train / ~380 val / ~381 test, columns include `input_ids`, `attention_mask`, `labels`.
+**Expected**: ~9,824 train / ~1,228 val / ~1,228 test, columns include `input_ids`, `attention_mask`, `labels`.
 
 ## Step 5 — Stage 0: Baseline Evaluation
 
@@ -257,8 +259,7 @@ STAGE COMPARISON
 ======================================================================
 | Metric                            | baseline | sft   | grpo  |
 |---|---|---|---|
-| tool_selection_accuracy_api-bank  | 48.2%    | 78.5% | 91.2% |
-| tool_selection_accuracy_toolbench | 42.1%    | 72.3% | 88.7% |
+| tool_selection_accuracy_synthetic | 42.1%    | 72.3% | 88.7% |
 | argument_accuracy                 | 25.3%    | 62.1% | 84.5% |
 | schema_compliance                 | 31.0%    | 85.2% | 96.1% |
 | multi_step_success                | 18.7%    | 58.4% | 80.3% |
@@ -266,29 +267,21 @@ STAGE COMPARISON
 ======================================================================
 ```
 
-## Step 9 — Push Model to Hugging Face Hub
+## Step 9 — Push to Hugging Face Hub
 
+### Push trained adapters
 ```bash
-python -c "
-from huggingface_hub import HfApi
-api = HfApi()
+# Automatically pushed during training when HF_TOKEN + HF_REPO_ID are set.
+# To push manually:
+huggingface-cli upload dhruvanmurthy/qwen3-8b-tool-use-sft-lora outputs/sft/
+huggingface-cli upload dhruvanmurthy/qwen3-8b-tool-use-grpo-lora outputs/grpo/
+```
 
-# Upload GRPO adapter (final model)
-api.upload_folder(
-    folder_path='outputs/grpo',
-    repo_id='dhruvanmurthy/qwen3-8b-tool-use-grpo',
-    repo_type='model',
-)
-
-# Upload SFT adapter
-api.upload_folder(
-    folder_path='outputs/sft',
-    repo_id='dhruvanmurthy/qwen3-8b-tool-use-sft',
-    repo_type='model',
-)
-
-print('Models pushed to HF Hub!')
-"
+### Push synthetic dataset
+```bash
+python scripts/push_dataset_to_hub.py \
+  --repo-id dhruvanmurthy/qwen3-8b-synthetic-tool-use \
+  --data-dir data/raw/synthetic
 ```
 
 ---
@@ -339,8 +332,9 @@ Before submitting to production:
 - [ ] Review W&B training curves
 - [ ] Confirm loss decreased monotonically
 - [ ] Check no overfitting (train/val gap < 0.3)
-- [ ] Validate model pushes to HF Hub
+- [ ] Validate model saves locally to outputs/
 - [ ] Test inference code on fresh model
+- [ ] Push adapters + dataset to HF Hub
 - [ ] Document any issues in TROUBLESHOOTING.md
 
 ## Success Indicators
@@ -350,7 +344,7 @@ Before submitting to production:
 2. ✅ Final eval_loss < 1.5
 3. ✅ Tool selection accuracy > 85%
 4. ✅ Training time within expectations
-5. ✅ Model pushes to HF Hub
+5. ✅ Model pushed to HF Hub
 6. ✅ All runs logged to W&B
 7. ✅ Documentation complete
 
@@ -372,7 +366,8 @@ Before submitting to production:
 Tool Selection: 92% accuracy
 Training Cost: $40
 Time: 20 hours
-Model: https://huggingface.co/dhruvanmurthy/qwen3-8b-tool-use-lora
+Model: https://huggingface.co/dhruvanmurthy/qwen3-8b-tool-use-grpo-lora
+Dataset: https://huggingface.co/datasets/dhruvanmurthy/qwen3-8b-synthetic-tool-use
 
 Setup guide: https://github.com/dhruvanmurthy/Qwen3-8B-FineTuning
 ```

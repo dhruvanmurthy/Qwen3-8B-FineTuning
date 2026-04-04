@@ -7,7 +7,7 @@ set -e
 # Always run from the repo root, regardless of where the script is called from
 cd "$(dirname "$0")/.."
 
-# Load .env so HF_TOKEN and friends are available to Python
+# Load .env so WANDB keys and friends are available to Python
 if [ -f .env ]; then
     set -a
     # shellcheck disable=SC1091
@@ -15,7 +15,7 @@ if [ -f .env ]; then
     set +a
     echo "Loaded .env"
 else
-    echo "WARNING: .env not found — copy .env.example to .env and fill in HF_TOKEN"
+    echo "WARNING: .env not found — copy .env.example to .env and fill in your keys"
 fi
 
 echo "================================================"
@@ -42,7 +42,7 @@ python3 scripts/generate_synthetic.py \
     --output-dir "$RAW_DATA_DIR/synthetic"
 
 echo ""
-echo "Step 2/2: Loading & processing all datasets..."
+echo "Step 2/2: Processing and tokenizing synthetic data..."
 
 # Run Python script for data preparation
 python3 << 'EOF'
@@ -67,16 +67,46 @@ tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B")
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
 
-# Prepare datasets
+# Load and preprocess (keep all original columns intact)
 logger.info("Loading and preprocessing datasets...")
-datasets = loader.prepare_datasets(tokenizer, max_length=2048)
+dataset = loader.load_all_datasets()
+dataset = loader.preprocess(dataset)
+if loader.config.get("balance_sources", True):
+    dataset = loader._balance_sources(dataset)
+train_data, val_data, test_data = loader.split_dataset(dataset)
 
-logger.info("Saving datasets...")
-datasets.save_to_disk("./data/processed/")
+# Save raw test split as JSONL for evaluation BEFORE text normalization.
+# This preserves all original fields: instruction, tool_calls, tools, query,
+# function, api_call, etc. — everything _normalize_row needs to extract
+# expected tools and prompts for structured evaluation.
+import json
+test_raw_path = Path("./data/processed/test_raw.jsonl")
+with open(test_raw_path, "w") as f:
+    for row in test_data:
+        f.write(json.dumps(row) + "\n")
+logger.info(f"Saved raw test split → {test_raw_path} ({len(test_data)} examples, all fields preserved)")
 
-logger.info(f"Train set: {len(datasets['train'])} examples")
-logger.info(f"Validation set: {len(datasets['validation'])} examples")
-logger.info(f"Test set: {len(datasets['test'])} examples")
+# Now normalize to unified text column for tokenization (training use only)
+logger.info("Normalizing to unified text column for training...")
+train_data = loader._normalize_to_text(train_data)
+val_data   = loader._normalize_to_text(val_data)
+test_data  = loader._normalize_to_text(test_data)
+
+# Tokenize and save Arrow splits for training
+logger.info("Tokenizing datasets for training...")
+from datasets import DatasetDict
+train_tok = loader.tokenize_dataset(train_data, tokenizer, max_length=2048)
+val_tok   = loader.tokenize_dataset(val_data,   tokenizer, max_length=2048)
+test_tok  = loader.tokenize_dataset(test_data,  tokenizer, max_length=2048)
+tokenized = DatasetDict({"train": train_tok, "validation": val_tok, "test": test_tok})
+
+logger.info("Saving tokenized datasets...")
+tokenized.save_to_disk("./data/processed/")
+
+logger.info(f"Train set: {len(tokenized['train'])} examples")
+logger.info(f"Validation set: {len(tokenized['validation'])} examples")
+logger.info(f"Test set (tokenized): {len(tokenized['test'])} examples")
+logger.info(f"Test set (raw JSONL): {len(test_data)} examples")
 
 logger.info("Dataset preparation complete!")
 

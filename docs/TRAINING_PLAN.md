@@ -160,17 +160,14 @@ bash scripts/prepare_datasets.sh
 ```
 
 This produces Arrow-format datasets in `data/processed/`:
-- `train/` (~3,043 samples)
-- `validation/` (~380 samples)
-- `test/` (~381 samples)
+- `train/` (~9,824 samples)
+- `validation/` (~1,228 samples)
+- `test/` (~1,228 samples)
 
 Sources loaded:
-- `gorilla-llm/APIBench` (5,000 → ~1,644 after dedup)
-- `tuandunghcmut/toolbench-v1` benchmark split (200 rows)
-- `gorilla-llm/Berkeley-Function-Calling-Leaderboard` (258 rows)
 - Synthetic via `scripts/generate_synthetic.py` (15,000 sampled → ~12,280 after dedup)
 
-After median-target balancing (~951 per source), the final training set is ~3,043 samples.
+The final training set is ~9,824 samples (80% of ~12,280 deduplicated synthetic examples).
 
 ### Step 2: Model Setup
 
@@ -448,7 +445,7 @@ The GRPO trainer calls `compute_rewards()` from `rewards.py`, which selects the 
 ### Atropos Coordinator
 
 The coordinator bridges reward environments with the GRPO training loop:
-- Creates per-source environments (api_bank, toolbench, gorilla, synthetic)
+- Creates per-source environments (synthetic)
 - Each environment provides prompts and computes rewards
 - Unified prompt dataset is built by sampling proportionally from all sources
 

@@ -24,7 +24,6 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import tinker
 import wandb
-from datasets import load_dataset
 from tinker import ServiceClient
 from tinker_cookbook.model_info import get_recommended_renderer_name
 from tinker_cookbook.renderers import get_renderer, get_text_content
@@ -170,21 +169,6 @@ def _normalize_row(row: Dict[str, Any], source: str) -> Optional[EvalExample]:
                 if isinstance(c, dict)
             ]
 
-    # APIBench schema: api_call string
-    if not expected_tool:
-        expected_tool = _extract_tool_from_api_call(row.get("api_call"))
-
-    # ToolBench fallback: relevant_apis is often a list of candidate tools.
-    # Use the first relevant API as a weak single-tool target if needed.
-    if not expected_tool:
-        relevant_apis = _json_load_maybe(row.get("relevant_apis"))
-        if isinstance(relevant_apis, list) and relevant_apis:
-            first = relevant_apis[0]
-            if isinstance(first, str):
-                expected_tool = first
-            elif isinstance(first, dict):
-                expected_tool = first.get("name") or first.get("api")
-
     return EvalExample(
         prompt=prompt,
         expected_tool=expected_tool,
@@ -207,28 +191,28 @@ def _load_jsonl_rows(path: Path) -> List[Dict[str, Any]]:
 
 
 def load_eval_examples(max_samples: int = 1000) -> List[EvalExample]:
-    """Load held-out evaluation examples from local artifacts first, then HF.
+    """Load held-out evaluation examples from prepared dataset or synthetic data.
 
     Priority:
-      1) `data/processed/test_raw.jsonl` (if present)
+      1) `data/processed/test_raw.jsonl` (raw test split from prepare_datasets.sh — all sources)
       2) local synthetic data held-out split (10%)
       3) HF datasets held-out split (10%)
     """
 
     examples: List[EvalExample] = []
 
-    # 1) Preferred local raw test set artifact
+    # 1) Preferred: raw test JSONL from prepare_datasets.sh (preserves source + tool metadata)
     test_raw = Path("data/processed/test_raw.jsonl")
     if test_raw.exists():
         rows = _load_jsonl_rows(test_raw)
         for row in rows:
-            ex = _normalize_row(row, source=str(row.get("source", "processed_test")))
+            ex = _normalize_row(row, source=str(row.get("source", "prepared")))
             if ex:
                 examples.append(ex)
         if examples:
-            logger.info("Loaded %d eval examples from %s", len(examples), test_raw)
+            logger.info("Loaded %d prepared test examples from %s", len(examples), test_raw)
 
-    # 2) Local synthetic fallback
+    # 2) Local synthetic fallback (if prepared dataset unavailable)
     if not examples:
         synth_dir = Path("data/raw/synthetic")
         if synth_dir.exists():
@@ -242,32 +226,6 @@ def load_eval_examples(max_samples: int = 1000) -> List[EvalExample]:
                     examples.append(ex)
             if examples:
                 logger.info("Loaded %d held-out synthetic eval examples", len(examples))
-
-    # 3) HF fallback held-out
-    if not examples:
-        hf_rows: List[Dict[str, Any]] = []
-
-        api_ds = load_dataset(
-            "gorilla-llm/APIBench",
-            data_files="torchhub_train.json",
-            split="train",
-        )
-        hf_rows.extend([dict(r, source="api-bank") for r in api_ds])
-
-        tb_ds = load_dataset(
-            "tuandunghcmut/toolbench-v1",
-            "benchmark",
-            split="g1_instruction",
-        )
-        hf_rows.extend([dict(r, source="toolbench") for r in tb_ds])
-
-        heldout = _stable_test_split(hf_rows, ratio=0.1)
-        for row in heldout:
-            ex = _normalize_row(row, source=str(row.get("source", "hf")))
-            if ex:
-                examples.append(ex)
-
-        logger.info("Loaded %d held-out HF eval examples", len(examples))
 
     if len(examples) > max_samples:
         rng = np.random.default_rng(42)
@@ -342,8 +300,14 @@ class ToolUseEvaluator:
             ),
         )
         seq = result.sequences[0]
-        parsed_msg, _ = self.renderer.parse_response(seq.tokens)
-        text = get_text_content(parsed_msg)
+        # Decode raw tokens directly so we get the full output including
+        # <think>...</think> blocks. get_text_content() strips thinking content
+        # and returns empty for Qwen3 responses where tool calls follow thinking.
+        text = self.renderer.tokenizer.decode(seq.tokens, skip_special_tokens=True)
+        if not text:
+            # Final fallback: parse_response path
+            parsed_msg, _ = self.renderer.parse_response(seq.tokens)
+            text = get_text_content(parsed_msg) or ""
         return text, len(seq.tokens)
 
     # --- tool extraction ---
@@ -377,7 +341,7 @@ class ToolUseEvaluator:
 
             output, _ = await self.generate(
                 example.prompt,
-                max_new_tokens=256,
+                max_new_tokens=4096,
                 system_prompt=self._build_system_prompt(example),
             )
             predicted = self.extract_tool_name(output)
@@ -395,6 +359,10 @@ class ToolUseEvaluator:
                     self.label, status, example.expected_tool, predicted,
                     example.prompt.replace("\n", " "),
                 )
+                # DEBUG: print full raw output for first 3 examples to diagnose extraction issues
+                if total <= 3:
+                    logger.info("  [%s] RAW OUTPUT (example %d):\n%s\n--- END RAW ---",
+                                self.label, total, output)
                 sample_rows.append({
                     "prompt": example.prompt[:300],
                     "expected_tool": example.expected_tool,
@@ -427,7 +395,7 @@ class ToolUseEvaluator:
 
             output, _ = await self.generate(
                 example.prompt,
-                max_new_tokens=256,
+                max_new_tokens=1024,
                 system_prompt=self._build_system_prompt(example),
             )
 
@@ -477,7 +445,7 @@ class ToolUseEvaluator:
         for example in examples:
             output, _ = await self.generate(
                 example.prompt,
-                max_new_tokens=256,
+                max_new_tokens=1024,
                 system_prompt=self._build_system_prompt(example),
             )
 
@@ -522,7 +490,7 @@ class ToolUseEvaluator:
         for example in multi_step:
             output, _ = await self.generate(
                 example.prompt,
-                max_new_tokens=512,
+                max_new_tokens=1536,
                 system_prompt=self._build_system_prompt(example),
             )
             predicted_calls = extract_tool_calls(output)
@@ -571,7 +539,7 @@ class ToolUseEvaluator:
             start = time.time()
             output, n_tokens = await self.generate(
                 example.prompt,
-                max_new_tokens=256,
+                max_new_tokens=1024,
                 system_prompt=self._build_system_prompt(example),
             )
             elapsed = time.time() - start

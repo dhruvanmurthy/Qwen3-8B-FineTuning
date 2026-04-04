@@ -11,7 +11,7 @@ This is a fine-tuned version of [Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B)
 - **LoRA Rank (r)**: 64
 - **LoRA Alpha (α)**: 16
 - **Target Modules**: q_proj, v_proj, k_proj, o_proj, gate_proj, up_proj, down_proj
-- **Training Data**: ~3,043 train samples (from ~20k raw across APIBench, ToolBench, Gorilla BFCL, Synthetic)
+- **Training Data**: Synthetic tool-use examples (generated via `scripts/generate_synthetic.py`)
 - **Training Infrastructure**: [Tinker](https://tinker.thinkingmachines.ai/) remote GPUs
 - **Training Date**: March 2026
 
@@ -32,12 +32,9 @@ This is a fine-tuned version of [Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B)
 
 | Dataset | Accuracy | Test Samples |
 |---------|----------|--------------|
-| APIBench Test | TBD | ~95 |
-| ToolBench Test | TBD | ~95 |
-| Gorilla BFCL Test | TBD | ~95 |
-| Synthetic Test | TBD | ~95 |
+| Synthetic Test | TBD | ~10% held-out |
 
-> **Note**: Test set is ~381 total samples, split roughly equally across 4 balanced sources.
+> **Note**: Eval uses a 10% held-out split of synthetic data.
 > Accuracies will be populated after running `python src/evaluate.py --mode all`.
 
 ## Intended Uses
@@ -92,26 +89,19 @@ This is a fine-tuned version of [Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B)
 - **Reasoning**: Limited to tool-relevant reasoning
 
 ### Known Limitations
-1. **Small Training Set**: ~3,043 balanced training samples; ToolBench (200) and BFCL (258) are oversampled
+1. **Synthetic-only Training**: Trained entirely on generated examples; real-world API distribution may differ
 2. **Hallucinations**: May suggest non-existent parameters in rare cases
 3. **Context Length**: Trained with max_length=2048 tokens
 4. **Language**: English only; multilingual performance untested
-5. **Text Format**: Trained on unified `text` column (not structured ChatML); output format depends on source schema
 
 ## Training Details
 
 ### Data Composition
 ```
-APIBench (gorilla-llm/APIBench):                     5,000 raw → ~1,644 after dedup
-ToolBench (tuandunghcmut/toolbench-v1 benchmark):      200 raw →    200 after dedup
-Gorilla BFCL (gorilla-llm/Berkeley-Function-Calling):   258 raw →    258 after dedup
-Synthetic (scripts/generate_synthetic.py):           15,000 raw → ~12,280 after dedup
-─────────────────────────────────────────────────────────────────────────────────────
-Total raw:    20,458 → 14,382 after dedup → ~3,804 after balance → 3,043 train
+Synthetic (scripts/generate_synthetic.py): 15,000 raw → ~12,280 after dedup
 ```
 
-Balancing uses median-target resampling (~951 per source). Small sources
-(ToolBench, BFCL) are oversampled; large sources are undersampled.
+All training data is generated synthetically via template-based tool-use examples.
 
 ### Training Hyperparameters
 ```yaml
