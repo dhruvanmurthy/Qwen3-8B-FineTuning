@@ -24,11 +24,33 @@ fi
 
 STAGE="${1:-all}"
 BASE_MODEL="${BASE_MODEL:-Qwen/Qwen3-8B}"
-SMOKE_DATA="./data/raw/synthetic_smoke"
-SFT_OUT="./outputs/smoke_sft"
-GRPO_OUT="./outputs/smoke_grpo"
-EVAL_SAMPLES=20   # tiny eval set
+SMOKE_DATA="${SMOKE_DATA:-./data/raw/synthetic_smoke}"
+SFT_OUT="${SFT_OUT:-./outputs/smoke_sft}"
+GRPO_OUT="${GRPO_OUT:-./outputs/smoke_grpo}"
+
+# Mini-but-informative defaults (still cheaper than full training)
+SMOKE_DATA_SAMPLES="${SMOKE_DATA_SAMPLES:-1024}"
+EVAL_SAMPLES="${EVAL_SAMPLES:-100}"
+
+SFT_LORA_RANK="${SFT_LORA_RANK:-32}"
+SFT_LR="${SFT_LR:-2e-4}"
+SFT_BATCH_SIZE="${SFT_BATCH_SIZE:-8}"
+SFT_EPOCHS="${SFT_EPOCHS:-2}"
+SFT_MAX_SEQ_LENGTH="${SFT_MAX_SEQ_LENGTH:-1536}"
+SFT_LOGGING_STEPS="${SFT_LOGGING_STEPS:-5}"
+SFT_SAVE_STEPS="${SFT_SAVE_STEPS:-20}"
+
+GRPO_LORA_RANK="${GRPO_LORA_RANK:-32}"
+GRPO_LR="${GRPO_LR:-4e-5}"
+GRPO_BATCH_SIZE="${GRPO_BATCH_SIZE:-8}"
+GRPO_GROUP_SIZE="${GRPO_GROUP_SIZE:-8}"
+GRPO_MAX_STEPS="${GRPO_MAX_STEPS:-20}"
+GRPO_MAX_COMPLETION_LENGTH="${GRPO_MAX_COMPLETION_LENGTH:-384}"
+GRPO_SAVE_STEPS="${GRPO_SAVE_STEPS:-10}"
+GRPO_LOG_SAMPLES_EVERY="${GRPO_LOG_SAMPLES_EVERY:-2}"
+
 RESET_SMOKE_OUTPUTS="${RESET_SMOKE_OUTPUTS:-1}"
+REGENERATE_SMOKE_DATA="${REGENERATE_SMOKE_DATA:-0}"
 
 case "$STAGE" in
     all|baseline|sft|grpo) ;;
@@ -88,10 +110,12 @@ PYEOF
 echo " Smoke Test (Real Tinker, Minimal Data)"
 echo "============================================="
 echo "  Base model    : $BASE_MODEL"
+echo "  Data samples  : $SMOKE_DATA_SAMPLES"
 echo "  Eval samples  : $EVAL_SAMPLES"
 echo "  SFT output    : $SFT_OUT"
 echo "  GRPO output   : $GRPO_OUT"
 echo "  Reset outputs : $RESET_SMOKE_OUTPUTS"
+echo "  Regen data    : $REGENERATE_SMOKE_DATA"
 echo "  Stage         : $STAGE"
 echo "============================================="
 
@@ -120,12 +144,13 @@ print(last)
 PYEOF
 }
 
-# Generate tiny synthetic dataset
+# Generate smoke synthetic dataset
 mkdir -p "$SMOKE_DATA"
-if [ ! -f "$SMOKE_DATA/synthetic_single.jsonl" ]; then
+if [[ "$REGENERATE_SMOKE_DATA" == "1" ]] || [ ! -f "$SMOKE_DATA/synthetic_single.jsonl" ]; then
     echo ""
-    echo ">>> Generating tiny synthetic dataset (128 samples)..."
-    python3 scripts/generate_synthetic.py --num-samples 128 --output-dir "$SMOKE_DATA"
+    echo ">>> Generating smoke synthetic dataset ($SMOKE_DATA_SAMPLES samples)..."
+    rm -f "$SMOKE_DATA"/*.jsonl
+    python3 scripts/generate_synthetic.py --num-samples "$SMOKE_DATA_SAMPLES" --output-dir "$SMOKE_DATA"
 fi
 
 # --------------------------------------------------
@@ -146,7 +171,7 @@ if [[ "$STAGE" == "baseline" || "$STAGE" == "all" ]]; then
 fi
 
 # --------------------------------------------------
-# Stage 1 — SFT (real Tinker training, 1 epoch, tiny data)
+# Stage 1 — SFT (real Tinker training, mini config)
 # --------------------------------------------------
 if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
     if [[ "$RESET_SMOKE_OUTPUTS" == "1" ]]; then
@@ -155,18 +180,18 @@ if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
     fi
 
     echo ""
-    echo ">>> Stage 1: SFT Training (1 epoch, tiny data)"
+    echo ">>> Stage 1: SFT Training (epochs=$SFT_EPOCHS, batch=$SFT_BATCH_SIZE, seq=$SFT_MAX_SEQ_LENGTH)"
     python3 src/train.py \
         --base-model "$BASE_MODEL" \
         --synthetic-data-dir "$SMOKE_DATA" \
         --output-dir "$SFT_OUT" \
-        --lora-rank 16 \
-        --learning-rate 2e-4 \
-        --batch-size 4 \
-        --num-epochs 1 \
-        --max-seq-length 1024 \
-        --logging-steps 1 \
-        --save-steps 5 \
+        --lora-rank "$SFT_LORA_RANK" \
+        --learning-rate "$SFT_LR" \
+        --batch-size "$SFT_BATCH_SIZE" \
+        --num-epochs "$SFT_EPOCHS" \
+        --max-seq-length "$SFT_MAX_SEQ_LENGTH" \
+        --logging-steps "$SFT_LOGGING_STEPS" \
+        --save-steps "$SFT_SAVE_STEPS" \
         --seed 42
 
     _require_file "$SFT_OUT/checkpoints.jsonl" "SFT training did not produce checkpoints.jsonl"
@@ -188,7 +213,7 @@ if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
 fi
 
 # --------------------------------------------------
-# Stage 2 — GRPO (real Tinker training, 3 steps)
+# Stage 2 — GRPO (real Tinker training, mini config)
 # --------------------------------------------------
 if [[ "$STAGE" == "grpo" || "$STAGE" == "all" ]]; then
     if [[ "$RESET_SMOKE_OUTPUTS" == "1" ]]; then
@@ -198,20 +223,24 @@ if [[ "$STAGE" == "grpo" || "$STAGE" == "all" ]]; then
 
     _require_file "$SFT_OUT/checkpoints.jsonl" "GRPO requires SFT output; run 'bash scripts/run_smoke_test.sh sft' first"
 
+    if [[ "$GRPO_LORA_RANK" != "$SFT_LORA_RANK" ]]; then
+        _fail "LoRA rank mismatch: SFT_LORA_RANK=$SFT_LORA_RANK but GRPO_LORA_RANK=$GRPO_LORA_RANK. GRPO resume from SFT requires matching rank."
+    fi
+
     echo ""
-    echo ">>> Stage 2: GRPO Training (3 steps, group-size 4)"
+    echo ">>> Stage 2: GRPO Training (steps=$GRPO_MAX_STEPS, batch=$GRPO_BATCH_SIZE, group=$GRPO_GROUP_SIZE)"
     python3 src/train_grpo.py \
         --base-model "$BASE_MODEL" \
         --sft-checkpoint "$SFT_OUT" \
         --output-dir "$GRPO_OUT" \
-        --lora-rank 16 \
-        --learning-rate 4e-5 \
-        --batch-size 4 \
-        --group-size 4 \
-        --max-steps 3 \
-        --max-completion-length 256 \
-        --save-steps 3 \
-        --log-samples-every 1 \
+        --lora-rank "$GRPO_LORA_RANK" \
+        --learning-rate "$GRPO_LR" \
+        --batch-size "$GRPO_BATCH_SIZE" \
+        --group-size "$GRPO_GROUP_SIZE" \
+        --max-steps "$GRPO_MAX_STEPS" \
+        --max-completion-length "$GRPO_MAX_COMPLETION_LENGTH" \
+        --save-steps "$GRPO_SAVE_STEPS" \
+        --log-samples-every "$GRPO_LOG_SAMPLES_EVERY" \
         --seed 42
 
     _require_file "$GRPO_OUT/checkpoints.jsonl" "GRPO training did not produce checkpoints.jsonl"
