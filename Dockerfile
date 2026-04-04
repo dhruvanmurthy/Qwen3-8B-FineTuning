@@ -10,6 +10,9 @@
 # ---------------------------------------------------------------------------
 FROM python:3.11-slim
 
+# Suppress debconf warnings in non-interactive build environment
+ENV DEBIAN_FRONTEND=noninteractive
+
 # System deps: git (for pip VCS installs), ca-certificates, curl (healthcheck)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \

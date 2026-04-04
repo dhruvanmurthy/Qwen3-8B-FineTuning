@@ -74,6 +74,11 @@ if [ -f "$ENV_FILE" ]; then
         # Must be KEY=VALUE format
         [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || continue
         var_name="${line%%=*}"
+        raw_value="${line#*=}"
+        # Strip inline comments (e.g. `value  # comment`) — non-standard but common in .env files
+        clean_value="${raw_value%%  #*}"
+        clean_value="${clean_value%% #*}"
+        line="${var_name}=${clean_value}"
         if [[ "$var_name" =~ (KEY|TOKEN|SECRET|PASSWORD)$ ]]; then
             ENV_SECURE+=("$line")
         else
@@ -92,6 +97,10 @@ CPU="${CPU:-2}"
 MEMORY="${MEMORY:-4}"   # GB — comfortable headroom; ~$0.71 per 6-hour run
 
 IMAGE_FULL="${ACR_NAME}.azurecr.io/qwen3-pipeline:${IMAGE_TAG}"
+
+# Group all W&B runs from this container launch together so they're easy
+# to identify. W&B respects WANDB_RUN_GROUP automatically — no code changes needed.
+ENV_PLAIN+=("WANDB_RUN_GROUP=${CONTAINER_NAME}")
 
 echo "============================================================="
 echo " Qwen3-8B Pipeline — Azure Container Instances"
@@ -145,17 +154,40 @@ fi
 echo ""
 echo ">>> Step 4: Fetch ACR credentials"
 if [ "$DRY_RUN" = "false" ]; then
+    # Ensure admin user is enabled (may not be if ACR pre-existed the Bicep deploy)
+    az acr update --name "$ACR_NAME" --admin-enabled true --output none
+    ACR_USERNAME=$(az acr credential show \
+        --name "$ACR_NAME" \
+        --query "username" \
+        --output tsv | tr -d '\r\n')
     ACR_PASSWORD=$(az acr credential show \
         --name "$ACR_NAME" \
         --query "passwords[0].value" \
-        --output tsv)
+        --output tsv | tr -d '\r\n')
 else
+    ACR_USERNAME="$ACR_NAME"
     ACR_PASSWORD="<dry-run-password>"
 fi
 
 # ---- Step 5: Create and start the container instance -----------------------
 echo ""
 echo ">>> Step 5: Create ACI container (${CPU} vCPU / ${MEMORY} GB)"
+
+# If a container with this name already exists (e.g. fixed CONTAINER_NAME + --no-teardown),
+# delete it first so az container create doesn't fail.
+if [ "$DRY_RUN" = "false" ]; then
+    EXISTING=$(az container show \
+        --resource-group "$RESOURCE_GROUP" \
+        --name "$CONTAINER_NAME" \
+        --query "name" --output tsv 2>/dev/null || true)
+    if [ -n "$EXISTING" ]; then
+        echo "    Existing container '$CONTAINER_NAME' found — deleting before recreate..."
+        az container delete \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$CONTAINER_NAME" \
+            --yes --output none
+    fi
+fi
 
 # Build the command string for the pipeline
 PIPELINE_CMD="bash scripts/run_pipeline.sh ${STAGE}"
@@ -164,8 +196,9 @@ _run az container create \
     --resource-group "$RESOURCE_GROUP" \
     --name "$CONTAINER_NAME" \
     --image "$IMAGE_FULL" \
+    --os-type Linux \
     --registry-login-server "${ACR_NAME}.azurecr.io" \
-    --registry-username "$ACR_NAME" \
+    --registry-username "$ACR_USERNAME" \
     --registry-password "$ACR_PASSWORD" \
     --cpu "$CPU" \
     --memory "$MEMORY" \

@@ -1,0 +1,49 @@
+# Exclude large/unnecessary directories from az acr build upload.
+# az acr build uses this file the same way docker build uses .dockerignore.
+
+# W&B run artifacts (large, contain locked files on Windows/WSL)
+wandb/
+
+# Training outputs and checkpoints
+outputs/
+
+# Generated data (regenerated inside the container)
+data/
+
+# Version control
+.git/
+.gitignore
+.gitattributes
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# VS Code
+.vscode/
+
+# Virtual environments / conda
+.env
+environment.yml
+
+# Dev/test artifacts
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# Local scripts not needed in the image
+scripts/azure_pipeline.sh
+
+# Docs and non-runtime files
+docs/
+*.md
+LICENSE
+CONTRIBUTING.md
+EXECUTION_PLAN.md
+GETTING_STARTED.md
+infra/
