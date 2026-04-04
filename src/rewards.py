@@ -189,6 +189,116 @@ def full_chain_reward(
     return rewards
 
 
+def chain_partial_reward(
+    completions: list[str],
+    expected_chain: list[str] | None = None,
+    **kwargs,
+) -> list[float]:
+    """Partial credit: fraction of expected tools produced in correct order.
+
+    Scores each position independently — correct tool at position i earns
+    1/N credit.  Gives gradient signal even when the chain is partially right.
+    """
+    if expected_chain is None:
+        return [0.0] * len(completions)
+
+    rewards = []
+    for completion, chain_str in zip(completions, expected_chain):
+        try:
+            expected = (
+                json.loads(chain_str)
+                if isinstance(chain_str, str)
+                else chain_str
+            )
+        except (json.JSONDecodeError, TypeError):
+            rewards.append(0.0)
+            continue
+
+        predicted = extract_tool_calls(completion)
+        pred_names = [c.get("name", "").lower().strip() for c in predicted]
+        exp_names = [
+            (e.lower().strip() if isinstance(e, str) else e.get("name", "").lower().strip())
+            for e in expected
+        ]
+        if not exp_names:
+            rewards.append(0.0)
+            continue
+
+        # Position-wise credit
+        score = sum(
+            1 for i, name in enumerate(exp_names)
+            if i < len(pred_names) and pred_names[i] == name
+        ) / len(exp_names)
+        rewards.append(score)
+    return rewards
+
+
+def argument_f1_reward(
+    completions: list[str],
+    expected_args: list[str] | None = None,
+    **kwargs,
+) -> list[float]:
+    """Partial credit based on argument key-value F1.
+
+    For each completion, computes:
+        precision = matching_keys / predicted_keys
+        recall    = matching_keys / expected_keys
+        F1        = 2 * p * r / (p + r)
+
+    A key-value pair is "matching" when both the key AND string-normalised
+    value are equal.  Returns 1.0 for exact match, 0.0 for no overlap.
+    """
+    if expected_args is None:
+        return [0.0] * len(completions)
+
+    rewards = []
+    for completion, expected_str in zip(completions, expected_args):
+        call = extract_tool_call(completion)
+        if call is None:
+            rewards.append(0.0)
+            continue
+
+        try:
+            expected = (
+                json.loads(expected_str)
+                if isinstance(expected_str, str)
+                else expected_str
+            )
+        except (json.JSONDecodeError, TypeError):
+            rewards.append(0.0)
+            continue
+
+        pred_args = call.get("arguments", call.get("parameters", {}))
+        if isinstance(pred_args, str):
+            try:
+                pred_args = json.loads(pred_args)
+            except json.JSONDecodeError:
+                rewards.append(0.0)
+                continue
+
+        if not isinstance(pred_args, dict) or not isinstance(expected, dict):
+            rewards.append(0.0)
+            continue
+
+        # Build flat key=value sets for comparison (stringify values)
+        def _flat(d: dict) -> set:
+            return {f"{k}={json.dumps(v, sort_keys=True)}" for k, v in d.items()}
+
+        pred_set = _flat(pred_args)
+        exp_set = _flat(expected)
+
+        if not pred_set and not exp_set:
+            rewards.append(1.0)
+            continue
+
+        tp = len(pred_set & exp_set)
+        precision = tp / len(pred_set) if pred_set else 0.0
+        recall = tp / len(exp_set) if exp_set else 0.0
+        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+        rewards.append(f1)
+    return rewards
+
+
 # ---------------------------------------------------------------------------
 # Composite reward (used by GRPO training and environments)
 # ---------------------------------------------------------------------------
@@ -198,7 +308,10 @@ def compute_rewards(
     metadata: dict,
     return_components: bool = False,
 ) -> "list[float] | tuple[list[float], dict[str, list[float]]]":
-    """Compute average of all applicable binary reward signals.
+    """Compute average of all applicable reward signals.
+
+    Uses F1-based argument scoring and partial chain credit to provide a
+    smoother gradient signal compared to strict binary matching.
 
     Args:
         completions: List of completion strings to grade.
@@ -212,9 +325,12 @@ def compute_rewards(
     if metadata.get("expected_tool"):
         reward_fns["tool_name"] = tool_name_reward
     if metadata.get("expected_args"):
-        reward_fns["argument_match"] = argument_match_reward
+        # Use F1 for partial credit instead of strict binary match
+        reward_fns["argument_f1"] = argument_f1_reward
     if metadata.get("expected_chain") and metadata["expected_chain"] != "[]":
+        # Full credit for exact chain + partial credit for positional overlap
         reward_fns["chain"] = full_chain_reward
+        reward_fns["chain_partial"] = chain_partial_reward
 
     n_fns = len(reward_fns)
     all_rewards = [0.0] * len(completions)

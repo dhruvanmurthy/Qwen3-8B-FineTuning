@@ -751,6 +751,150 @@ def make_multistep_weather_reminder(rng: random.Random) -> dict:
     }
 
 
+def make_multistep_calendar_email_reminder(rng: random.Random) -> dict:
+    """3-step: create calendar event → send email invite → set reminder."""
+    title = rng.choice(["Team sync", "Project review", "Client call", "Quarterly planning",
+                        "Design sprint", "1:1 with manager", "Product demo", "Sprint retrospective"])
+    date = rng.choice(DATE_PATTERNS[:15])
+    time = rng.choice(TIME_PATTERNS)
+    attendee = rng.choice(PEOPLE)
+    recipient = rng.choice([p for p in PEOPLE if p != attendee])
+    msg = rng.choice(REMINDER_MESSAGES)
+    instructions = [
+        f"Schedule a '{title}' on {date} at {time}, email {recipient} the invite, and set a reminder to prepare beforehand.",
+        f"Create a calendar event for '{title}' ({date} {time}), then send {recipient} an email, then remind me about prep.",
+        f"I need to: (1) add '{title}' to my calendar for {date} at {time}, (2) email {recipient} about it, (3) set a reminder.",
+        f"Book '{title}' on {date} at {time} with {attendee}, email {recipient} the details, and set a '{msg}' reminder.",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] in ("create_calendar_event", "send_email", "set_reminder")],
+        "tool_calls": [
+            {"name": "create_calendar_event", "arguments": {
+                "title": title, "date": date, "time": time, "attendees": [attendee],
+            }},
+            {"name": "send_email", "arguments": {
+                "to": recipient,
+                "subject": f"Invite: {title} on {date}",
+                "body": f"You are invited to '{title}' on {date} at {time}. Please confirm attendance.",
+            }},
+            {"name": "set_reminder", "arguments": {
+                "message": f"Prepare for {title}", "datetime": f"{date}T08:00:00",
+            }},
+        ],
+        "category": "multi_step",
+        "num_steps": 3,
+    }
+
+
+def make_multistep_search_translate_email(rng: random.Random) -> dict:
+    """3-step: search → translate result → email it."""
+    query = rng.choice(SEARCH_QUERIES)
+    target, lang_name = rng.choice(list(LANGUAGES.items()))
+    recipient = rng.choice(PEOPLE)
+    instructions = [
+        f"Search for '{query}', translate the summary to {lang_name}, then email it to {recipient}.",
+        f"Look up '{query}', convert the result to {lang_name}, and forward to {recipient}.",
+        f"Find info on '{query}', translate it into {lang_name}, then send to {recipient}.",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] in ("search_web", "translate_text", "send_email")],
+        "tool_calls": [
+            {"name": "search_web", "arguments": {"query": query, "num_results": 5}},
+            {"name": "translate_text", "arguments": {"text": f"Search results for: {query}", "target_lang": target}},
+            {"name": "send_email", "arguments": {
+                "to": recipient,
+                "subject": f"[{lang_name}] {query}",
+                "body": f"Translated search results for '{query}' in {lang_name}.",
+            }},
+        ],
+        "category": "multi_step",
+        "num_steps": 3,
+    }
+
+
+def make_multistep_stock_exchange_calculate(rng: random.Random) -> dict:
+    """3-step: stock price → exchange rate → calculate converted value."""
+    ticker = rng.choice(TICKERS)
+    from_c = "USD"
+    to_c = rng.choice([c for c in CURRENCIES[:10] if c != "USD"])
+    shares = rng.randint(1, 100)
+    instructions = [
+        f"Get {ticker} stock price, get the {from_c}/{to_c} exchange rate, then calculate the value of {shares} shares in {to_c}.",
+        f"What is {shares} shares of {ticker} worth in {to_c}? Get the stock price, exchange rate, then compute.",
+        f"Fetch {ticker} price and the {from_c} to {to_c} rate, then calculate total for {shares} shares.",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] in ("get_stock_price", "get_exchange_rate", "calculate")],
+        "tool_calls": [
+            {"name": "get_stock_price", "arguments": {"symbol": ticker, "currency": from_c}},
+            {"name": "get_exchange_rate", "arguments": {"from_currency": from_c, "to_currency": to_c}},
+            {"name": "calculate", "arguments": {"expression": f"{shares} * price * rate"}},
+        ],
+        "category": "multi_step",
+        "num_steps": 3,
+    }
+
+
+def make_ambiguous_weather_vs_news(rng: random.Random) -> dict:
+    """Ambiguous: 'what's happening in X' — weather, not news."""
+    city = rng.choice(CITIES)
+    instructions = [
+        f"What's happening with the weather in {city}?",
+        f"What are the current conditions in {city} outside?",
+        f"Tell me the latest outdoor conditions in {city}.",
+        f"How's {city} looking weather-wise today?",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] in ("get_weather", "get_news")],
+        "tool_calls": [{"name": "get_weather", "arguments": {"city": city, "units": "C"}}],
+        "category": "weather",
+        "num_steps": 1,
+    }
+
+
+def make_ambiguous_calculate_vs_convert(rng: random.Random) -> dict:
+    """Ambiguous: unit conversion phrased as a calculation."""
+    from_unit, to_unit, val_fn = rng.choice(UNIT_CONVERSIONS)
+    value = val_fn(rng)
+    instructions = [
+        f"Calculate how much {value} {from_unit} is in {to_unit}.",
+        f"Compute the {to_unit} equivalent of {value} {from_unit}.",
+        f"Figure out {value} {from_unit} expressed in {to_unit}.",
+        f"Work out: {value} {from_unit} in {to_unit}.",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] in ("convert_units", "calculate")],
+        "tool_calls": [{"name": "convert_units", "arguments": {
+            "value": value, "from_unit": from_unit, "to_unit": to_unit,
+        }}],
+        "category": "conversion",
+        "num_steps": 1,
+    }
+
+
+def make_ambiguous_search_vs_news(rng: random.Random) -> dict:
+    """Ambiguous: 'find latest info on X' — web search, not news."""
+    topic = rng.choice(NEWS_TOPICS)
+    instructions = [
+        f"Find the latest information about {topic} online.",
+        f"Search for recent developments in {topic}.",
+        f"Look up what's new with {topic} on the web.",
+        f"Get me web results about {topic}.",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] in ("search_web", "get_news")],
+        "tool_calls": [{"name": "search_web", "arguments": {"query": topic, "num_results": 5}}],
+        "category": "search",
+        "num_steps": 1,
+    }
+
+
 # ── Main generator ─────────────────────────────────────────────────────────────
 
 SINGLE_GENERATORS_WEIGHTS = [
@@ -766,6 +910,10 @@ SINGLE_GENERATORS_WEIGHTS = [
     (make_music_example, 2),
     (make_directions_example, 3),
     (make_send_email_example, 3),
+    # Ambiguous examples — model must discriminate between similar tools
+    (make_ambiguous_weather_vs_news, 2),
+    (make_ambiguous_calculate_vs_convert, 2),
+    (make_ambiguous_search_vs_news, 2),
 ]
 
 MULTI_GENERATORS_WEIGHTS = [
@@ -775,13 +923,29 @@ MULTI_GENERATORS_WEIGHTS = [
     (make_multistep_exchange_convert, 2),
     (make_multistep_search_email, 2),
     (make_multistep_weather_reminder, 2),
+    # 3-step chains
+    (make_multistep_calendar_email_reminder, 3),
+    (make_multistep_search_translate_email, 2),
+    (make_multistep_stock_exchange_calculate, 2),
 ]
 
-# 70% single, 30% multi-step
+# 65% single, 35% multi-step (up from 30% to give model more chain exposure)
 ALL_GENERATORS = (
-    [(g, w * 7) for g, w in SINGLE_GENERATORS_WEIGHTS] +
-    [(g, w * 3) for g, w in MULTI_GENERATORS_WEIGHTS]
+    [(g, w * 65) for g, w in SINGLE_GENERATORS_WEIGHTS] +
+    [(g, w * 35) for g, w in MULTI_GENERATORS_WEIGHTS]
 )
+
+
+def _add_distractor_tools(example: dict, rng: random.Random) -> None:
+    """Inject 3-5 distractor tools so the model must select from a candidate set."""
+    needed = {t["name"] for t in example.get("tools", [])}
+    distractors = [t for t in TOOLS if t["name"] not in needed]
+    n = rng.randint(3, min(5, len(distractors)))
+    extra = rng.sample(distractors, n)
+    # Shuffle so the correct tool isn't always first
+    all_tools = example["tools"] + extra
+    rng.shuffle(all_tools)
+    example["tools"] = all_tools
 
 
 def generate_dataset(num_samples: int, seed: int) -> list:
@@ -792,12 +956,19 @@ def generate_dataset(num_samples: int, seed: int) -> list:
     for _ in range(num_samples):
         gen_fn = rng.choices(generators, weights=weights, k=1)[0]
         example = gen_fn(rng)
-        # Include category + full tool call to maximise uniqueness of text field
-        tool_call_str = json.dumps(example["tool_calls"][0])
+
+        # Add distractor tools to make tool selection non-trivial
+        _add_distractor_tools(example, rng)
+
+        # Build text: serialize ALL tool calls (fixes multi-step training)
+        call_blocks = "\n".join(
+            f"<tool_call>\n{json.dumps(tc)}\n</tool_call>"
+            for tc in example["tool_calls"]
+        )
         example["text"] = (
             f"[{example['category']}] "
             f"USER: {example['instruction']}\n"
-            f"ASSISTANT: <tool_call>\n{tool_call_str}\n</tool_call>"
+            f"ASSISTANT: {call_blocks}"
         )
         examples.append(example)
     return examples

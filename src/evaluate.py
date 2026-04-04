@@ -483,47 +483,109 @@ class ToolUseEvaluator:
     async def evaluate_multi_step(self, examples: List[EvalExample]) -> float:
         logger.info("[%s] Evaluating multi-step chains…", self.label)
         multi_step = [e for e in examples if len(e.expected_chain) > 1]
-        logger.info("  [%s] Found %d multi-step examples", self.label, len(multi_step))
+        logger.info("  [%s] Found %d multi-step examples (out of %d total)",
+                    self.label, len(multi_step), len(examples))
+
+        if not multi_step:
+            logger.warning("  [%s] NO multi-step examples in eval set — check data/processed or synthetic JSONL.", self.label)
+            self.results["multi_step_success"] = 0.0
+            return 0.0
 
         correct = total = 0
+        # Diagnostic counters
+        count_zero_calls = 0
+        count_one_call = 0
+        count_partial = 0
+        count_wrong_order = 0
         sample_rows = []
-        for example in multi_step:
+
+        for i, example in enumerate(multi_step):
             output, _ = await self.generate(
                 example.prompt,
-                max_new_tokens=1536,
+                max_new_tokens=2048,  # more room for multi-call outputs
                 system_prompt=self._build_system_prompt(example),
             )
             predicted_calls = extract_tool_calls(output)
             pred_names = [c.get("name", "").lower().strip() for c in predicted_calls]
             exp_names = [t.lower().strip() for t in example.expected_chain]
             match = pred_names == exp_names
-            found = sum(1 for t in exp_names if t in pred_names)
+
+            found_count = sum(1 for t in exp_names if t in pred_names)
+            n_pred = len(pred_names)
+            n_exp = len(exp_names)
+
+            # Diagnose failure mode
+            if n_pred == 0:
+                failure_mode = "zero_calls"
+                count_zero_calls += 1
+            elif n_pred == 1 and n_exp > 1:
+                failure_mode = "only_one_call"
+                count_one_call += 1
+            elif found_count == n_exp and not match:
+                failure_mode = "wrong_order"
+                count_wrong_order += 1
+            elif found_count > 0 and found_count < n_exp:
+                failure_mode = "partial"
+                count_partial += 1
+            elif match:
+                failure_mode = "correct"
+            else:
+                failure_mode = f"wrong_tools(pred={pred_names})"
+
             if match:
                 correct += 1
             total += 1
 
-            if total <= 10 or (not match and len(sample_rows) < 30):
+            # Always log first 5 in detail; log all mismatches up to 50
+            log_this = (i < 5) or (not match and len(sample_rows) < 50)
+            if log_this:
                 status = "✓" if match else "✗"
                 logger.info(
-                    "  [%s] %s  chain=%s  found=%d/%d  |  output=%.150s…",
-                    self.label, status, example.expected_chain,
-                    found, len(example.expected_chain),
-                    output.replace("\n", " "),
+                    "  [%s] %s  chain=%s  predicted=%s  found=%d/%d  mode=%s",
+                    self.label, status, exp_names, pred_names,
+                    found_count, n_exp, failure_mode,
                 )
+                if i < 5:
+                    # Full raw output so we can see format issues
+                    logger.info(
+                        "  [%s] RAW OUTPUT (multi-step example %d/%d):\n%s\n--- END ---",
+                        self.label, i + 1, len(multi_step), output,
+                    )
                 sample_rows.append({
                     "prompt": example.prompt[:300],
-                    "expected_chain": str(example.expected_chain),
-                    "found": f"{found}/{len(example.expected_chain)}",
+                    "expected_chain": str(exp_names),
+                    "predicted_calls": str(pred_names),
+                    "found": f"{found_count}/{n_exp}",
+                    "failure_mode": failure_mode,
                     "match": match,
-                    "model_output": output[:500],
+                    "n_predicted": n_pred,
+                    "model_output": output[:800],
                 })
+
+        # Summary diagnostics
+        logger.info(
+            "  [%s] Multi-step failure breakdown — zero_calls=%d  one_call=%d  "
+            "partial=%d  wrong_order=%d  correct=%d  total=%d",
+            self.label, count_zero_calls, count_one_call,
+            count_partial, count_wrong_order, correct, total,
+        )
 
         if sample_rows:
             table = wandb.Table(
-                columns=["prompt", "expected_chain", "found", "match", "model_output"],
-                data=[[r["prompt"], r["expected_chain"], r["found"], r["match"], r["model_output"]] for r in sample_rows],
+                columns=["prompt", "expected_chain", "predicted_calls",
+                         "found", "failure_mode", "match", "n_predicted", "model_output"],
+                data=[[r["prompt"], r["expected_chain"], r["predicted_calls"],
+                       r["found"], r["failure_mode"], r["match"],
+                       r["n_predicted"], r["model_output"]] for r in sample_rows],
             )
             wandb.log({f"{self.label}/multi_step_samples": table})
+            # Also log failure mode breakdown as scalars
+            wandb.log({
+                f"{self.label}/multi_step_zero_calls": count_zero_calls / total if total else 0,
+                f"{self.label}/multi_step_one_call_only": count_one_call / total if total else 0,
+                f"{self.label}/multi_step_partial": count_partial / total if total else 0,
+                f"{self.label}/multi_step_wrong_order": count_wrong_order / total if total else 0,
+            })
 
         rate = correct / total if total > 0 else 0
         self.results["multi_step_success"] = rate
