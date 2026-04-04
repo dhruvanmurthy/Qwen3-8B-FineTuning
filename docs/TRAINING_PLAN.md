@@ -443,7 +443,7 @@ All rewards are programmatic (0.0 or 1.0) — no learned reward model:
 | `schema_validation_reward` | 1.0 if output is a valid JSON tool call |
 | `full_chain_reward` | 1.0 if all tools in a multi-step chain are correct |
 
-The GRPO trainer receives all four functions and logs each dimension separately in W&B.
+The GRPO trainer calls `compute_rewards()` from `rewards.py`, which selects the applicable reward functions based on the available metadata and averages them. Each component is logged separately in W&B.
 
 ### Atropos Coordinator
 

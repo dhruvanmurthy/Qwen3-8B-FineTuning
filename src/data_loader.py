@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-import torch
 import yaml
 from datasets import Dataset, DatasetDict, concatenate_datasets, load_dataset
+
+from constants import TOOL_USE_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -565,11 +566,7 @@ class ToolUseDataLoader:
             dataset = self._balance_sources(dataset)
 
         if system_prompt is None:
-            system_prompt = (
-                "You are a helpful assistant that can use tools. "
-                "When you need to use a tool, respond with a JSON object "
-                'containing "name" and "arguments" fields.'
-            )
+            system_prompt = TOOL_USE_SYSTEM_PROMPT
 
         chat_template_available = (
             hasattr(tokenizer, "apply_chat_template")

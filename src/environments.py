@@ -17,8 +17,7 @@ import numpy as np
 from datasets import Dataset
 
 from rewards import (
-    argument_match_reward,
-    full_chain_reward,
+    compute_rewards,
     schema_validation_reward,
     tool_name_reward,
 )
@@ -64,20 +63,8 @@ class ToolUseEnvironment:
 def compute_combined_reward(completions: list[str], **kwargs) -> list[float]:
     """Compute average of all applicable binary reward signals.
 
+    Thin wrapper around rewards.compute_rewards for backward compatibility.
     Standalone function usable from any training loop (Tinker or otherwise).
     """
-    all_rewards: list[list[float]] = []
-
-    # Schema reward (always active — needs no metadata)
-    all_rewards.append(schema_validation_reward(completions, **kwargs))
-
-    if kwargs.get("expected_tool") is not None:
-        all_rewards.append(tool_name_reward(completions, **kwargs))
-
-    if kwargs.get("expected_args") is not None:
-        all_rewards.append(argument_match_reward(completions, **kwargs))
-
-    if kwargs.get("expected_chain") is not None:
-        all_rewards.append(full_chain_reward(completions, **kwargs))
-
-    return np.mean(all_rewards, axis=0).tolist()
+    metadata = {k: [v] if not isinstance(v, list) else v for k, v in kwargs.items()}
+    return compute_rewards(completions, metadata)

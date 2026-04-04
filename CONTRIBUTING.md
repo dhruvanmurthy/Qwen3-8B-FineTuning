@@ -179,6 +179,9 @@ pytest tests/ -v
 def extract_tool_name(text: str) -> str:
     """Extract tool name from generated text.
 
+    Delegates to rewards.extract_tool_call() for consistency
+    with GRPO training-time reward grading.
+
     Args:
         text: Generated text containing tool calls
 
@@ -186,7 +189,7 @@ def extract_tool_name(text: str) -> str:
         Tool name extracted from text, or None if not found
 
     Example:
-        >>> extract_tool_name('Use get_weather(city="Paris")')
+        >>> extract_tool_name('<tool_call>{"name": "get_weather", "arguments": {"city": "Paris"}}</tool_call>')
         'get_weather'
     """
 ```

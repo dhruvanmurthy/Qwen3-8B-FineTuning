@@ -181,3 +181,45 @@ def full_chain_reward(
 
         rewards.append(1.0 if pred_names == exp_names else 0.0)
     return rewards
+
+
+# ---------------------------------------------------------------------------
+# Composite reward (used by GRPO training and environments)
+# ---------------------------------------------------------------------------
+
+def compute_rewards(
+    completions: list[str],
+    metadata: dict,
+    return_components: bool = False,
+) -> "list[float] | tuple[list[float], dict[str, list[float]]]":
+    """Compute average of all applicable binary reward signals.
+
+    Args:
+        completions: List of completion strings to grade.
+        metadata: Dict with expected_tool, expected_args, expected_chain keys.
+        return_components: If True, also return per-component reward breakdown.
+
+    Returns:
+        Mean rewards list, or (mean_rewards, component_rewards) if return_components.
+    """
+    reward_fns: dict = {"schema": schema_validation_reward}
+    if metadata.get("expected_tool"):
+        reward_fns["tool_name"] = tool_name_reward
+    if metadata.get("expected_args"):
+        reward_fns["argument_match"] = argument_match_reward
+    if metadata.get("expected_chain") and metadata["expected_chain"] != "[]":
+        reward_fns["chain"] = full_chain_reward
+
+    n_fns = len(reward_fns)
+    all_rewards = [0.0] * len(completions)
+    component_rewards: dict[str, list[float]] = {}
+
+    for name, fn in reward_fns.items():
+        fn_rewards = fn(completions, **metadata)
+        component_rewards[name] = list(fn_rewards)
+        for i, r in enumerate(fn_rewards):
+            all_rewards[i] += r / n_fns
+
+    if return_components:
+        return all_rewards, component_rewards
+    return all_rewards

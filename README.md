@@ -43,10 +43,11 @@ Qwen3-8B-FineTuning/
 │
 ├── src/
 │   ├── __init__.py
+│   ├── constants.py                  # Shared constants (TOOL_USE_SYSTEM_PROMPT)
 │   ├── data_loader.py                # Dataset loading, preprocessing, GRPO prompt prep
 │   ├── train.py                      # Stage 1: SFT training (via Tinker)
 │   ├── train_grpo.py                 # Stage 2: GRPO training (via Tinker)
-│   ├── rewards.py                    # Binary verifiable reward functions
+│   ├── rewards.py                    # Reward functions, tool-call extraction, composite scorer
 │   ├── environments.py               # Reward environment for GRPO
 │   └── evaluate.py                   # 3-stage evaluation (baseline/SFT/GRPO)
 │
@@ -55,7 +56,7 @@ Qwen3-8B-FineTuning/
 │   ├── prepare_datasets.sh           # Download & process datasets
 │   ├── run_local_training.sh         # SFT training via Tinker
 │   ├── evaluate_model.sh             # Run evaluation
-│   ├── validate_local.sh             # Local smoke test (dry-run, no GPU cost)
+│   ├── run_smoke_test.sh             # End-to-end smoke test (real Tinker, mini data)
 │   └── generate_synthetic.py         # Synthetic data generation
 │
 ├── data/
@@ -92,11 +93,11 @@ bash scripts/run_pipeline.sh grpo       # Train GRPO (requires SFT output)
 bash scripts/run_pipeline.sh compare    # Side-by-side comparison
 ```
 
-### Validate Locally (No GPU Cost)
+### Smoke Test (Mini End-to-End)
 
 ```bash
-# Smoke test the pipeline with dry-run mode (tiny model, no Tinker cost)
-bash scripts/validate_local.sh
+# Run a quick end-to-end test with real Tinker training on minimal data
+bash scripts/run_smoke_test.sh
 ```
 
 ## Documentation
@@ -153,8 +154,8 @@ Tracks learning curves, loss metrics, reward signals (GRPO), evaluation tables, 
 # 1. Create feature branch
 git checkout -b feature/my-improvement
 
-# 2. Make changes, validate locally (no Tinker cost)
-bash scripts/validate_local.sh
+# 2. Make changes, run smoke test
+bash scripts/run_smoke_test.sh
 
 # 3. Commit and push
 git add .

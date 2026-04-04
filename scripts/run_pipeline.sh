@@ -32,11 +32,28 @@ STAGE="${1:-all}"
 BASE_MODEL="${BASE_MODEL:-Qwen/Qwen3-8B}"
 SFT_OUTPUT="${SFT_OUTPUT:-./outputs/sft}"
 GRPO_OUTPUT="${GRPO_OUTPUT:-./outputs/grpo}"
+EVAL_SAMPLES="${EVAL_SAMPLES:-1000}"
+
+SFT_LORA_RANK="${SFT_LORA_RANK:-64}"
+GRPO_LORA_RANK="${GRPO_LORA_RANK:-$SFT_LORA_RANK}"
+
 WANDB_PROJECT="${WANDB_PROJECT:-qwen3-8b-tool-use}"
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 HF_REPO_ID="${HF_REPO_ID:-}"
 LOCAL_VALIDATE="${LOCAL_VALIDATE:-false}"
 DRY_RUN_ARGS=""
+
+_fail() {
+    echo ""
+    echo "[FAIL-FAST] $1"
+    exit 1
+}
+
+_require_file() {
+    local file_path="$1"
+    local msg="$2"
+    [ -f "$file_path" ] || _fail "$msg (missing: $file_path)"
+}
 
 # Verify Tinker API key unless local validation mode is enabled
 if [ "$LOCAL_VALIDATE" != "true" ] && [ -z "$TINKER_API_KEY" ]; then
@@ -103,6 +120,9 @@ echo "============================================="
 echo "  Base model      : $BASE_MODEL"
 echo "  SFT output      : $SFT_OUTPUT"
 echo "  GRPO output     : $GRPO_OUTPUT"
+echo "  Eval samples    : $EVAL_SAMPLES"
+echo "  SFT LoRA rank   : $SFT_LORA_RANK"
+echo "  GRPO LoRA rank  : $GRPO_LORA_RANK"
 echo "  Stage           : $STAGE"
 echo "  W&B project     : $WANDB_PROJECT"
 if [ -n "$WANDB_ENTITY" ]; then echo "  W&B entity      : $WANDB_ENTITY"; fi
@@ -121,6 +141,7 @@ if [[ "$STAGE" == "baseline" || "$STAGE" == "all" ]]; then
         python3 src/evaluate.py \
             --mode baseline \
             --base-model "$BASE_MODEL" \
+            --max-samples "$EVAL_SAMPLES" \
             --output outputs/eval_baseline.json
     fi
 fi
@@ -142,7 +163,7 @@ if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
         --base-model "$BASE_MODEL" \
         --synthetic-data-dir "./data/raw/synthetic" \
         --output-dir "$SFT_OUTPUT" \
-        --lora-rank 64 \
+        --lora-rank "$SFT_LORA_RANK" \
         --learning-rate 2e-4 \
         --batch-size 8 \
         --num-epochs 3 \
@@ -150,6 +171,8 @@ if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
         --logging-steps 10 \
         --save-steps 25 \
         $DRY_RUN_ARGS
+
+    _require_file "$SFT_OUTPUT/checkpoints.jsonl" "SFT training did not produce checkpoints.jsonl"
 
     if [ "$LOCAL_VALIDATE" = "true" ]; then
         echo ">>> Stage 1 evaluation skipped in local validation mode"
@@ -164,6 +187,7 @@ if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
                 --mode sft \
                 --base-model "$BASE_MODEL" \
                 --sft-sampler-path "$SFT_SAMPLER" \
+                --max-samples "$EVAL_SAMPLES" \
                 --output outputs/eval_sft.json
         fi
     fi
@@ -173,19 +197,27 @@ fi
 # Stage 2 — GRPO training + evaluation
 # --------------------------------------------------
 if [[ "$STAGE" == "grpo" || "$STAGE" == "all" ]]; then
+    _require_file "$SFT_OUTPUT/checkpoints.jsonl" "GRPO requires SFT output; run SFT stage first"
+
+    if [[ "$GRPO_LORA_RANK" != "$SFT_LORA_RANK" ]]; then
+        _fail "LoRA rank mismatch: SFT_LORA_RANK=$SFT_LORA_RANK but GRPO_LORA_RANK=$GRPO_LORA_RANK. With latest Tinker checkpoint loading, these must match."
+    fi
+
     echo ""
-    echo ">>> Stage 2: GRPO Training (Tinker, LoRA r=32, LR 4e-5, group 8, 50 steps)"
+    echo ">>> Stage 2: GRPO Training (Tinker, LoRA r=$GRPO_LORA_RANK, LR 4e-5, group 8, 50 steps)"
     python3 src/train_grpo.py \
         --base-model "$BASE_MODEL" \
         --sft-checkpoint "$SFT_OUTPUT" \
         --output-dir "$GRPO_OUTPUT" \
-        --lora-rank 32 \
+        --lora-rank "$GRPO_LORA_RANK" \
         --learning-rate 4e-5 \
         --batch-size 16 \
         --group-size 8 \
         --max-steps 50 \
         --save-steps 10 \
         $DRY_RUN_ARGS
+
+    _require_file "$GRPO_OUTPUT/checkpoints.jsonl" "GRPO training did not produce checkpoints.jsonl"
 
     if [ "$LOCAL_VALIDATE" = "true" ]; then
         echo ">>> Stage 2 evaluation skipped in local validation mode"
@@ -200,6 +232,7 @@ if [[ "$STAGE" == "grpo" || "$STAGE" == "all" ]]; then
                 --mode grpo \
                 --base-model "$BASE_MODEL" \
                 --grpo-sampler-path "$GRPO_SAMPLER" \
+                --max-samples "$EVAL_SAMPLES" \
                 --output outputs/eval_grpo.json
         fi
     fi
@@ -222,6 +255,7 @@ if [[ "$STAGE" == "compare" || "$STAGE" == "all" ]]; then
             --base-model "$BASE_MODEL" \
             ${SFT_SAMPLER:+--sft-sampler-path "$SFT_SAMPLER"} \
             ${GRPO_SAMPLER:+--grpo-sampler-path "$GRPO_SAMPLER"} \
+            --max-samples "$EVAL_SAMPLES" \
             --output outputs/eval_comparison.json
     fi
 fi

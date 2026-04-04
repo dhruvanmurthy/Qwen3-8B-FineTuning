@@ -31,77 +31,31 @@ from tinker_cookbook.model_info import get_recommended_renderer_name
 from tinker_cookbook.checkpoint_utils import save_checkpoint_async, get_last_checkpoint
 
 from data_loader import ToolUseDataLoader
-from rewards import (
-    argument_match_reward,
-    full_chain_reward,
-    schema_validation_reward,
-    tool_name_reward,
-)
+from constants import TOOL_USE_SYSTEM_PROMPT
+from rewards import compute_rewards
 
 logger = logging.getLogger(__name__)
 
-TOOL_USE_SYSTEM_PROMPT = (
-    "You are a helpful assistant that can use tools. "
-    "When you need to use a tool, respond with a JSON tool call "
-    "inside <tool_call> tags, like:\n"
-    "<tool_call>\n"
-    '{"name": "tool_name", "arguments": {"arg": "value"}}\n'
-    "</tool_call>"
-)
 
+async def _create_lora_training_client(service_client, base_model: str, rank: int,
+                                       checkpoint_path: str | None = None,
+                                       load_optimizer: bool = True):
+    """Create a LoRA training client, optionally loading a checkpoint.
 
-async def _create_lora_training_client_compat(service_client, base_model: str, rank: int,
-                                              checkpoint_path: str | None = None,
-                                              load_optimizer: bool = True):
-    """Create LoRA training client across Tinker API versions.
-
-    Newer Tinker versions removed `checkpoint=` from
-    `create_lora_training_client_async`. If checkpoint is requested, we create
-    a client from `base_model` and then load weights via `load_state*_async`.
+    Creates a fresh client from base_model, then restores weights (and
+    optionally optimizer state) from checkpoint_path if provided.
     """
-    if checkpoint_path:
-        try:
-            return await service_client.create_lora_training_client_async(
-                base_model=base_model,
-                rank=rank,
-                checkpoint=checkpoint_path,
-            )
-        except TypeError:
-            logger.warning(
-                "Tinker client does not support checkpoint=...; creating client from base model and loading state.",
-            )
-
-            client = await service_client.create_lora_training_client_async(
-                base_model=base_model,
-                rank=rank,
-            )
-            if load_optimizer:
-                load_future = await client.load_state_with_optimizer_async(checkpoint_path)
-            else:
-                load_future = await client.load_state_async(checkpoint_path)
-            await load_future.result_async()
-            return client
-
-        except Exception:
-            logger.warning(
-                "checkpoint=... path failed unexpectedly; retrying with explicit load_state API.",
-                exc_info=True,
-            )
-            client = await service_client.create_lora_training_client_async(
-                base_model=base_model,
-                rank=rank,
-            )
-            if load_optimizer:
-                load_future = await client.load_state_with_optimizer_async(checkpoint_path)
-            else:
-                load_future = await client.load_state_async(checkpoint_path)
-            await load_future.result_async()
-            return client
-
-    return await service_client.create_lora_training_client_async(
+    client = await service_client.create_lora_training_client_async(
         base_model=base_model,
         rank=rank,
     )
+    if checkpoint_path:
+        if load_optimizer:
+            load_future = await client.load_state_with_optimizer_async(checkpoint_path)
+        else:
+            load_future = await client.load_state_async(checkpoint_path)
+        await load_future.result_async()
+    return client
 
 
 def _run_dry_run_grpo(args, n_prompts: int) -> None:
@@ -265,48 +219,6 @@ def build_prompt_dataset(dataset_config: str) -> list[dict]:
 
 
 # -----------------------------------------------------------------------
-# Reward computation
-# -----------------------------------------------------------------------
-
-def compute_rewards(
-    completions: list[str],
-    metadata: dict,
-    return_components: bool = False,
-) -> "list[float] | tuple[list[float], dict[str, list[float]]]":
-    """Compute average of all applicable binary reward signals.
-
-    Args:
-        completions: List of completion strings to grade.
-        metadata: Dict with expected_tool, expected_args, expected_chain keys.
-        return_components: If True, also return per-component reward breakdown.
-
-    Returns:
-        Mean rewards list, or (mean_rewards, component_rewards) if return_components=True.
-    """
-    reward_fns: dict = {"schema": schema_validation_reward}
-    if metadata.get("expected_tool"):
-        reward_fns["tool_name"] = tool_name_reward
-    if metadata.get("expected_args"):
-        reward_fns["argument_match"] = argument_match_reward
-    if metadata.get("expected_chain") and metadata["expected_chain"] != "[]":
-        reward_fns["chain"] = full_chain_reward
-
-    n_fns = len(reward_fns)
-    all_rewards = [0.0] * len(completions)
-    component_rewards: dict[str, list[float]] = {}
-
-    for name, fn in reward_fns.items():
-        fn_rewards = fn(completions, **metadata)
-        component_rewards[name] = list(fn_rewards)
-        for i, r in enumerate(fn_rewards):
-            all_rewards[i] += r / n_fns
-
-    if return_components:
-        return all_rewards, component_rewards
-    return all_rewards
-
-
-# -----------------------------------------------------------------------
 # Training
 # -----------------------------------------------------------------------
 
@@ -348,7 +260,7 @@ async def train_grpo(args):
     if grpo_ckpt and grpo_ckpt.state_path:
         start_step = grpo_ckpt.batch or 0
         logger.info("Resuming GRPO from checkpoint: %s (step %d)", grpo_ckpt.state_path, start_step)
-        training_client = await _create_lora_training_client_compat(
+        training_client = await _create_lora_training_client(
             service_client=service_client,
             base_model=args.base_model,
             rank=args.lora_rank,
@@ -359,7 +271,7 @@ async def train_grpo(args):
         sft_ckpt = get_last_checkpoint(args.sft_checkpoint) if args.sft_checkpoint else None
         if sft_ckpt and sft_ckpt.state_path:
             logger.info("Starting GRPO from SFT checkpoint: %s", sft_ckpt.state_path)
-            training_client = await _create_lora_training_client_compat(
+            training_client = await _create_lora_training_client(
                 service_client=service_client,
                 base_model=args.base_model,
                 rank=args.lora_rank,
@@ -371,7 +283,7 @@ async def train_grpo(args):
                 "No valid SFT checkpoint found in '%s'. Starting GRPO from base model: %s",
                 args.sft_checkpoint, args.base_model,
             )
-            training_client = await _create_lora_training_client_compat(
+            training_client = await _create_lora_training_client(
                 service_client=service_client,
                 base_model=args.base_model,
                 rank=args.lora_rank,

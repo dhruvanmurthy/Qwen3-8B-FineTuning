@@ -28,7 +28,8 @@ from datasets import load_dataset
 from tinker import ServiceClient
 from tinker_cookbook.model_info import get_recommended_renderer_name
 from tinker_cookbook.renderers import get_renderer, get_text_content
-from rewards import extract_tool_call
+from constants import TOOL_USE_SYSTEM_PROMPT
+from rewards import extract_tool_call, extract_tool_calls
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -48,6 +49,7 @@ class EvalExample:
     expected_args: Optional[Dict[str, Any]]
     expected_chain: List[str]
     source: str
+    tools_context: Optional[str] = None
 
 
 def _stable_test_split(rows: List[Dict[str, Any]], ratio: float = 0.1) -> List[Dict[str, Any]]:
@@ -83,6 +85,34 @@ def _extract_tool_from_api_call(api_call: Any) -> Optional[str]:
         m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*\(", api_call)
         if m:
             return m.group(1)
+    return None
+
+
+def _extract_tools_context(row: Dict[str, Any]) -> Optional[str]:
+    """Build a tools context string for evaluation prompts.
+
+    Training includes full tool definitions (name, description, parameters) in
+    the system prompt; evaluation must provide the same level of detail to
+    avoid a prompt-format mismatch.
+    """
+    tools = _json_load_maybe(row.get("tools"))
+    if isinstance(tools, list) and tools:
+        defs = [t for t in tools[:20] if isinstance(t, dict) and t.get("name")]
+        if defs:
+            return json.dumps(defs, indent=2, ensure_ascii=False)
+
+    api_list = _json_load_maybe(row.get("api_list"))
+    if isinstance(api_list, list) and api_list:
+        defs = [t for t in api_list[:20] if isinstance(t, dict) and (t.get("name") or t.get("tool_name") or t.get("api_name"))]
+        if defs:
+            return json.dumps(defs, indent=2, ensure_ascii=False)
+
+    functions = _json_load_maybe(row.get("function"))
+    if isinstance(functions, list) and functions:
+        defs = [fn for fn in functions[:20] if isinstance(fn, dict) and fn.get("name")]
+        if defs:
+            return json.dumps(defs, indent=2, ensure_ascii=False)
+
     return None
 
 
@@ -161,6 +191,7 @@ def _normalize_row(row: Dict[str, Any], source: str) -> Optional[EvalExample]:
         expected_args=expected_args,
         expected_chain=[c for c in expected_chain if c],
         source=source,
+        tools_context=_extract_tools_context(row),
     )
 
 
@@ -283,21 +314,22 @@ class ToolUseEvaluator:
         self.label = label
         self.results: Dict[str, float] = {}
 
-    SYSTEM_PROMPT = (
-        "You are a helpful assistant that can use tools. "
-        "When you need to use a tool, respond with a JSON tool call "
-        "inside <tool_call> tags, like:\n"
-        "<tool_call>\n"
-        '{"name": "tool_name", "arguments": {"arg": "value"}}\n'
-        "</tool_call>"
-    )
+    SYSTEM_PROMPT = TOOL_USE_SYSTEM_PROMPT
 
     # --- generation ---
 
-    async def generate(self, prompt: str, max_new_tokens: int = 512) -> tuple:
+    @staticmethod
+    def _build_system_prompt(example: EvalExample) -> str:
+        if example.tools_context:
+            return f"{ToolUseEvaluator.SYSTEM_PROMPT}\n\nAvailable tools:\n{example.tools_context}"
+        return ToolUseEvaluator.SYSTEM_PROMPT
+
+    async def generate(self, prompt: str, max_new_tokens: int = 512,
+                       system_prompt: Optional[str] = None) -> tuple:
         """Return (text, n_output_tokens) via Tinker sample_async."""
+        sys_prompt = system_prompt or self.SYSTEM_PROMPT
         convo = [
-            {"role": "system", "content": self.SYSTEM_PROMPT},
+            {"role": "system", "content": sys_prompt},
             {"role": "user", "content": prompt},
         ]
         model_input = self.renderer.build_generation_prompt(convo)
@@ -318,17 +350,14 @@ class ToolUseEvaluator:
 
     @staticmethod
     def extract_tool_name(text: str) -> Optional[str]:
-        patterns = [
-            r'"name"\s*:\s*"([A-Za-z_][A-Za-z0-9_.-]*)"',
-            r"<tool_call>.*?\"name\"\s*:\s*\"([A-Za-z_][A-Za-z0-9_.-]*)\".*?</tool_call>",
-            r'\[([A-Za-z_][A-Za-z0-9_.-]*)\]',
-            r'use\s+([A-Za-z_][A-Za-z0-9_.-]*)',
-            r'([A-Za-z_][A-Za-z0-9_.-]*)\(',
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, text)
-            if match:
-                return match.group(1)
+        """Extract tool name using the same parser as GRPO rewards.
+
+        Uses rewards.extract_tool_call for consistency with training-time
+        reward grading.  Avoids false positives from loose regex patterns.
+        """
+        call = extract_tool_call(text)
+        if call and isinstance(call.get("name"), str):
+            return call["name"]
         return None
 
     # --- benchmarks ---
@@ -346,7 +375,11 @@ class ToolUseEvaluator:
             if not example.expected_tool:
                 continue
 
-            output, _ = await self.generate(example.prompt, max_new_tokens=256)
+            output, _ = await self.generate(
+                example.prompt,
+                max_new_tokens=256,
+                system_prompt=self._build_system_prompt(example),
+            )
             predicted = self.extract_tool_name(output)
             match = bool(predicted and predicted.lower() == example.expected_tool.lower())
 
@@ -392,7 +425,11 @@ class ToolUseEvaluator:
             if not example.expected_args:
                 continue
 
-            output, _ = await self.generate(example.prompt, max_new_tokens=256)
+            output, _ = await self.generate(
+                example.prompt,
+                max_new_tokens=256,
+                system_prompt=self._build_system_prompt(example),
+            )
 
             call = extract_tool_call(output)
             pred_args = None
@@ -438,7 +475,11 @@ class ToolUseEvaluator:
         valid = total = 0
         invalid_samples = []
         for example in examples:
-            output, _ = await self.generate(example.prompt, max_new_tokens=256)
+            output, _ = await self.generate(
+                example.prompt,
+                max_new_tokens=256,
+                system_prompt=self._build_system_prompt(example),
+            )
 
             call = extract_tool_call(output)
             is_valid = bool(
@@ -479,9 +520,16 @@ class ToolUseEvaluator:
         correct = total = 0
         sample_rows = []
         for example in multi_step:
-            output, _ = await self.generate(example.prompt, max_new_tokens=512)
-            found = sum(1 for t in example.expected_chain if t.lower() in output.lower())
-            match = found == len(example.expected_chain)
+            output, _ = await self.generate(
+                example.prompt,
+                max_new_tokens=512,
+                system_prompt=self._build_system_prompt(example),
+            )
+            predicted_calls = extract_tool_calls(output)
+            pred_names = [c.get("name", "").lower().strip() for c in predicted_calls]
+            exp_names = [t.lower().strip() for t in example.expected_chain]
+            match = pred_names == exp_names
+            found = sum(1 for t in exp_names if t in pred_names)
             if match:
                 correct += 1
             total += 1
@@ -521,7 +569,11 @@ class ToolUseEvaluator:
         times, total_tokens = [], 0
         for example in subset:
             start = time.time()
-            output, n_tokens = await self.generate(example.prompt, max_new_tokens=256)
+            output, n_tokens = await self.generate(
+                example.prompt,
+                max_new_tokens=256,
+                system_prompt=self._build_system_prompt(example),
+            )
             elapsed = time.time() - start
             times.append(elapsed)
             total_tokens += n_tokens
