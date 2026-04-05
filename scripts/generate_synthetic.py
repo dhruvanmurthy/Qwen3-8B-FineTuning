@@ -155,6 +155,103 @@ TOOLS = [
             "source": {"type": "string", "enum": ["spotify", "youtube", "local"], "required": False, "default": "spotify"},
         },
     },
+    # ── Confusable additions (harder tool selection) ──────────────────────────
+    {
+        "name": "get_weather_forecast",
+        "description": "Get a multi-day weather forecast for a location",
+        "parameters": {
+            "city": {"type": "string", "required": True},
+            "days": {"type": "integer", "required": False, "default": 7},
+            "units": {"type": "string", "enum": ["C", "F"], "required": False, "default": "C"},
+        },
+    },
+    {
+        "name": "search_news",
+        "description": "Search and filter news articles by keyword, source, and date range",
+        "parameters": {
+            "keywords": {"type": "string", "required": True},
+            "source": {"type": "string", "required": False},
+            "date_from": {"type": "string", "required": False},
+            "date_to": {"type": "string", "required": False},
+            "limit": {"type": "integer", "required": False, "default": 10},
+        },
+    },
+    {
+        "name": "send_sms",
+        "description": "Send an SMS text message to a phone number",
+        "parameters": {
+            "phone_number": {"type": "string", "required": True},
+            "message": {"type": "string", "required": True},
+        },
+    },
+    {
+        "name": "book_flight",
+        "description": "Search and book a flight ticket between two cities",
+        "parameters": {
+            "origin": {"type": "string", "required": True},
+            "destination": {"type": "string", "required": True},
+            "departure_date": {"type": "string", "required": True},
+            "return_date": {"type": "string", "required": False},
+            "passengers": {"type": "integer", "required": False, "default": 1},
+            "cabin_class": {"type": "string", "enum": ["economy", "business", "first"], "required": False, "default": "economy"},
+        },
+    },
+    {
+        "name": "get_stock_history",
+        "description": "Get historical price data for a stock ticker over a date range",
+        "parameters": {
+            "symbol": {"type": "string", "required": True},
+            "start_date": {"type": "string", "required": True},
+            "end_date": {"type": "string", "required": False},
+            "interval": {"type": "string", "enum": ["1d", "1wk", "1mo"], "required": False, "default": "1d"},
+        },
+    },
+    {
+        "name": "add_task",
+        "description": "Add a task or to-do item to a task list (no time-based trigger)",
+        "parameters": {
+            "title": {"type": "string", "required": True},
+            "due_date": {"type": "string", "required": False},
+            "priority": {"type": "string", "enum": ["low", "medium", "high"], "required": False, "default": "medium"},
+            "tags": {"type": "array", "required": False, "default": []},
+        },
+    },
+    {
+        "name": "convert_currency",
+        "description": "Convert a specific monetary amount from one currency to another",
+        "parameters": {
+            "amount": {"type": "number", "required": True},
+            "from_currency": {"type": "string", "required": True},
+            "to_currency": {"type": "string", "required": True},
+        },
+    },
+    {
+        "name": "get_place_details",
+        "description": "Get detailed information about a place, venue, or point of interest",
+        "parameters": {
+            "place_name": {"type": "string", "required": True},
+            "city": {"type": "string", "required": False},
+            "category": {"type": "string", "enum": ["restaurant", "hotel", "attraction", "hospital", "bank", "other"], "required": False, "default": "other"},
+        },
+    },
+    {
+        "name": "play_podcast",
+        "description": "Play a podcast episode from a specified show",
+        "parameters": {
+            "show_name": {"type": "string", "required": True},
+            "episode_title": {"type": "string", "required": False},
+            "playback_speed": {"type": "number", "required": False, "default": 1.0},
+        },
+    },
+    {
+        "name": "run_code",
+        "description": "Execute a code snippet in a sandboxed environment and return its output",
+        "parameters": {
+            "code": {"type": "string", "required": True},
+            "language": {"type": "string", "enum": ["python", "javascript", "bash", "sql"], "required": False, "default": "python"},
+            "timeout_seconds": {"type": "integer", "required": False, "default": 30},
+        },
+    },
 ]
 
 CITIES = [
@@ -341,6 +438,25 @@ EMAIL_BODIES = [
 ]
 
 HOTEL_TYPES = ["standard", "deluxe", "suite", "penthouse", "executive", "economy"]
+
+PHONE_NUMBERS = [
+    "+1-555-0100", "+1-555-0142", "+1-555-0187", "+1-555-0199",
+    "+44-20-7946-0958", "+44-20-7946-1234", "+49-30-12345678",
+    "+81-3-1234-5678", "+33-1-23-45-67-89", "+61-2-9876-5432",
+    "+91-98765-43210", "+86-10-1234-5678", "+55-11-98765-4321",
+    "+7-495-123-4567", "+82-2-1234-5678", "+971-4-123-4567",
+]
+
+PODCAST_SHOWS = [
+    "The Tim Ferriss Show", "Lex Fridman Podcast", "How I Built This",
+    "Masters of Scale", "The Daily", "Planet Money", "Radiolab",
+    "Serial", "SmartLess", "Conan O'Brien Needs a Friend",
+    "Crime Junkie", "Stuff You Should Know", "The Joe Rogan Experience",
+    "Hardcore History", "99% Invisible", "Hidden Brain",
+    "Freakonomics Radio", "TED Talks Daily", "The Knowledge Project",
+    "Acquired", "All-In Podcast", "Darknet Diaries",
+    "Software Engineering Daily", "Programming Throwdown",
+]
 
 
 # ── Template-based example generation ─────────────────────────────────────────
@@ -604,6 +720,287 @@ def make_send_email_example(rng: random.Random) -> dict:
     }
 
 
+def make_weather_forecast_example(rng: random.Random) -> dict:
+    """Get a multi-day forecast — must NOT call get_weather (current only)."""
+    city = rng.choice(CITIES)
+    days = rng.choice([3, 5, 7, 10, 14])
+    units = rng.choice(["C", "F"])
+    unit_word = "Celsius" if units == "C" else "Fahrenheit"
+    instructions = [
+        f"What will the weather be like in {city} over the next {days} days?",
+        f"Give me a {days}-day weather forecast for {city} in {unit_word}.",
+        f"What's the extended forecast for {city} this week?",
+        f"Will it rain in {city} in the coming days?",
+        f"Show me the upcoming weather outlook for {city} for the next {days} days.",
+        f"What should I pack for a trip to {city} over the next {days} days?",
+        f"I'm travelling to {city} next week — what's the weather forecast?",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] == "get_weather_forecast"],
+        "tool_calls": [{"name": "get_weather_forecast", "arguments": {"city": city, "days": days, "units": units}}],
+        "category": "weather",
+        "num_steps": 1,
+    }
+
+
+def make_search_news_example(rng: random.Random) -> dict:
+    """Keyword-filtered news search — not topic browsing (get_news) or general web search."""
+    topic = rng.choice(NEWS_TOPICS)
+    kw = rng.choice([
+        f"{topic} policy", f"new {topic} research", f"{topic} breakthrough",
+        f"latest {topic} updates", f"{topic} controversy", f"{topic} regulation",
+    ])
+    source = rng.choice([None, "BBC", "Reuters", "TechCrunch", "Bloomberg", "CNBC", None])
+    limit = rng.choice([5, 10, 15, 20])
+    date_from = rng.choice([None, "2026-03-01", "2026-01-01", None])
+    instructions = [
+        f"Search for news articles about '{kw}'.",
+        f"Find news pieces matching the keyword '{kw}'.",
+        f"Look up recent news about '{kw}' — show me {limit} results.",
+        f"I want news articles that specifically mention '{kw}'.",
+        f"Search news for '{kw}'" + (f" from {source}" if source else "") + ".",
+    ]
+    args: dict = {"keywords": kw, "limit": limit}
+    if source:
+        args["source"] = source
+    if date_from:
+        args["date_from"] = date_from
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] == "search_news"],
+        "tool_calls": [{"name": "search_news", "arguments": args}],
+        "category": "news",
+        "num_steps": 1,
+    }
+
+
+def make_send_sms_example(rng: random.Random) -> dict:
+    """Send SMS — distinguish from send_email (no subject, uses phone number)."""
+    phone = rng.choice(PHONE_NUMBERS)
+    messages = [
+        "I'm running 10 minutes late.", "Can we reschedule?", "On my way!",
+        "Call me when you get a chance.", "Did you get my email?",
+        "The meeting starts in 30 minutes.", "I'll be there by 5pm.",
+        "Can you send me the address?", "Package delivered!", "Don't forget: 3pm today.",
+    ]
+    msg = rng.choice(messages)
+    instructions = [
+        f"Text {phone}: {msg}",
+        f"Send a text message to {phone} saying '{msg}'.",
+        f"SMS {phone} with the message: {msg}",
+        f"Send '{msg}' via SMS to {phone}.",
+        f"Drop a quick text to {phone}: {msg}",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] == "send_sms"],
+        "tool_calls": [{"name": "send_sms", "arguments": {"phone_number": phone, "message": msg}}],
+        "category": "communication",
+        "num_steps": 1,
+    }
+
+
+def make_book_flight_example(rng: random.Random) -> dict:
+    """Book a flight — distinguish from book_hotel (uses origin+destination, departure_date)."""
+    origin, dest = rng.sample(CITIES, 2)
+    dep = rng.choice(DATE_PATTERNS[:15])
+    ret = rng.choice(DATE_PATTERNS[15:30]) if rng.random() > 0.4 else None
+    passengers = rng.choice([1, 1, 2, 3])
+    cabin = rng.choice(["economy", "economy", "business", "first"])
+    instructions = [
+        f"Book a flight from {origin} to {dest} departing {dep}.",
+        f"I need a {cabin} class flight from {origin} to {dest} on {dep}.",
+        f"Find and book me a flight: {origin} → {dest}, {dep}, {passengers} passenger(s).",
+        f"Reserve a flight ticket from {origin} to {dest} on {dep}.",
+        f"Book {passengers} seat(s) on a flight from {origin} to {dest} leaving {dep}.",
+    ]
+    args: dict = {"origin": origin, "destination": dest, "departure_date": dep, "passengers": passengers}
+    if ret:
+        args["return_date"] = ret
+    if cabin != "economy":
+        args["cabin_class"] = cabin
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] == "book_flight"],
+        "tool_calls": [{"name": "book_flight", "arguments": args}],
+        "category": "travel",
+        "num_steps": 1,
+    }
+
+
+def make_stock_history_example(rng: random.Random) -> dict:
+    """Historical stock prices over a range — NOT current price (get_stock_price)."""
+    ticker = rng.choice(TICKERS)
+    start = rng.choice(DATE_PATTERNS[:10])
+    end = rng.choice(DATE_PATTERNS[15:25])
+    interval = rng.choice(["1d", "1wk", "1mo"])
+    interval_word = {"1d": "daily", "1wk": "weekly", "1mo": "monthly"}[interval]
+    instructions = [
+        f"Show me the historical price chart for {ticker} from {start} to {end}.",
+        f"What were {ticker}'s prices between {start} and {end}?",
+        f"Get {interval_word} historical data for {ticker} since {start}.",
+        f"How did {ticker} perform from {start} to {end}?",
+        f"Pull {ticker} price history from {start} with {interval_word} intervals.",
+        f"I want to see {ticker}'s trading history between {start} and {end}.",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] == "get_stock_history"],
+        "tool_calls": [{"name": "get_stock_history", "arguments": {
+            "symbol": ticker, "start_date": start, "end_date": end, "interval": interval,
+        }}],
+        "category": "finance",
+        "num_steps": 1,
+    }
+
+
+def make_add_task_example(rng: random.Random) -> dict:
+    """Add to-do task — no datetime, distinguish from set_reminder (needs a time)."""
+    tasks = [
+        "Write project proposal", "Review pull requests", "Update documentation",
+        "Call insurance company", "Fix login bug", "Prepare presentation slides",
+        "Pay utility bills", "Schedule dentist appointment", "Clean up database",
+        "Reply to client emails", "Refactor authentication module", "Buy groceries",
+        "Submit expense report", "Read chapter 5", "Back up laptop",
+    ]
+    title = rng.choice(tasks)
+    priority = rng.choice(["low", "medium", "high"])
+    tags = rng.choice([[], ["work"], ["personal"], ["urgent"], ["work", "review"]])
+    due = rng.choice([None, rng.choice(DATE_PATTERNS[:10])])
+    instructions = [
+        f"Add '{title}' to my to-do list.",
+        f"Create a task: {title}.",
+        f"Put '{title}' on my task list with {priority} priority.",
+        f"I need to do: {title}. Add it as a task.",
+        f"Add a {priority}-priority task: {title}.",
+        f"Log a new task — '{title}'.",
+    ]
+    args: dict = {"title": title, "priority": priority}
+    if tags:
+        args["tags"] = tags
+    if due:
+        args["due_date"] = due
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] == "add_task"],
+        "tool_calls": [{"name": "add_task", "arguments": args}],
+        "category": "productivity",
+        "num_steps": 1,
+    }
+
+
+def make_convert_currency_example(rng: random.Random) -> dict:
+    """Convert a specific amount — NOT just the rate (get_exchange_rate returns rate only)."""
+    from_c, to_c = rng.sample(CURRENCIES[:15], 2)
+    amount = rng.choice([50, 100, 200, 500, 1000, 2500, 5000, 10000])
+    instructions = [
+        f"Convert {amount} {from_c} to {to_c}.",
+        f"How much is {amount} {from_c} in {to_c}?",
+        f"I have {amount} {from_c} — convert it to {to_c}.",
+        f"What's {amount} {from_c} worth in {to_c}?",
+        f"Change {amount} {from_c} into {to_c} for me.",
+        f"I need to convert {amount} {from_c} to {to_c}.",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] == "convert_currency"],
+        "tool_calls": [{"name": "convert_currency", "arguments": {
+            "amount": amount, "from_currency": from_c, "to_currency": to_c,
+        }}],
+        "category": "finance",
+        "num_steps": 1,
+    }
+
+
+def make_place_details_example(rng: random.Random) -> dict:
+    """Get place details — more general than get_restaurant_info."""
+    places = [
+        "Eiffel Tower", "Louvre Museum", "Big Ben", "Colosseum", "Sagrada Familia",
+        "Central Park", "Times Square", "Buckingham Palace",
+        "Statue of Liberty", "Golden Gate Bridge", "Lincoln Memorial",
+        "Sydney Opera House", "Burj Khalifa", "Taj Mahal", "Machu Picchu",
+    ]
+    place = rng.choice(places)
+    city = rng.choice(CITIES)
+    category = rng.choice(["attraction", "restaurant", "hotel", "hospital", "other"])
+    instructions = [
+        f"Get information about {place}.",
+        f"Tell me about {place} in {city}.",
+        f"What can you tell me about {place}?",
+        f"Look up details on {place}.",
+        f"I want to know more about {place}.",
+        f"Find details for the {place}.",
+    ]
+    args: dict = {"place_name": place}
+    if rng.random() > 0.5:
+        args["city"] = city
+    if category != "other":
+        args["category"] = category
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] == "get_place_details"],
+        "tool_calls": [{"name": "get_place_details", "arguments": args}],
+        "category": "information",
+        "num_steps": 1,
+    }
+
+
+def make_play_podcast_example(rng: random.Random) -> dict:
+    """Play a podcast — not music (play_music). Uses show_name, not song/artist query."""
+    show = rng.choice(PODCAST_SHOWS)
+    speed = rng.choice([1.0, 1.25, 1.5, None, None])
+    instructions = [
+        f"Play the podcast '{show}'.",
+        f"Put on an episode of {show}.",
+        f"I want to listen to the {show} podcast.",
+        f"Play the latest episode of {show}.",
+        f"Start {show}.",
+        f"Queue up {show} podcast for me.",
+    ]
+    args: dict = {"show_name": show}
+    if speed and speed != 1.0:
+        args["playback_speed"] = speed
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] == "play_podcast"],
+        "tool_calls": [{"name": "play_podcast", "arguments": args}],
+        "category": "entertainment",
+        "num_steps": 1,
+    }
+
+
+def make_run_code_example(rng: random.Random) -> dict:
+    """Execute code in sandbox — not calculate (which handles pure math expressions)."""
+    snippets = [
+        ("python", "print([x**2 for x in range(1, 11)])"),
+        ("python", "import hashlib; print(hashlib.md5(b'hello').hexdigest())"),
+        ("python", "from datetime import datetime; print(datetime.now().isoformat())"),
+        ("javascript", "console.log(Array.from({length: 5}, (_, i) => i * 2))"),
+        ("javascript", "const s = 'hello world'; console.log(s.split(' ').reverse().join(' '))"),
+        ("bash", "echo $(date) && ls -la"),
+        ("sql", "SELECT name, email FROM users WHERE active = 1 LIMIT 10"),
+        ("python", "data = {'a': 1, 'b': 2}; print(sum(data.values()))"),
+        ("python", "import math; print([math.sqrt(x) for x in [4, 9, 16, 25]])"),
+        ("sql", "SELECT COUNT(*) as total, status FROM orders GROUP BY status"),
+    ]
+    lang, code = rng.choice(snippets)
+    instructions = [
+        f"Run this {lang} code: {code}",
+        f"Execute the following {lang} snippet: {code}",
+        f"Can you run this {lang} for me? {code}",
+        f"Execute: {code}",
+        f"Run this code ({lang}): {code}",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] == "run_code"],
+        "tool_calls": [{"name": "run_code", "arguments": {"code": code, "language": lang}}],
+        "category": "code",
+        "num_steps": 1,
+    }
+
+
 # ── Multi-step generators ─────────────────────────────────────────────────────
 
 def make_multistep_weather_stock(rng: random.Random) -> dict:
@@ -838,6 +1235,135 @@ def make_multistep_stock_exchange_calculate(rng: random.Random) -> dict:
     }
 
 
+def make_multistep_4step_research_email(rng: random.Random) -> dict:
+    """4-step: web search → get news → translate → email."""
+    query = rng.choice(SEARCH_QUERIES)
+    topic = rng.choice(NEWS_TOPICS)
+    target, lang_name = rng.choice(list(LANGUAGES.items()))
+    recipient = rng.choice(PEOPLE)
+    instructions = [
+        f"Search for '{query}', also grab the latest {topic} news, translate both into {lang_name}, then email {recipient} a summary.",
+        f"Research '{query}' via web, get {topic} headlines, translate to {lang_name}, and send to {recipient}.",
+        f"Do a web search for '{query}', fetch {topic} news, convert results to {lang_name}, forward to {recipient}.",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] in ("search_web", "get_news", "translate_text", "send_email")],
+        "tool_calls": [
+            {"name": "search_web", "arguments": {"query": query, "num_results": 5}},
+            {"name": "get_news", "arguments": {"topic": topic, "num_articles": 3}},
+            {"name": "translate_text", "arguments": {"text": f"Summary about {query} and {topic}", "target_lang": target}},
+            {"name": "send_email", "arguments": {
+                "to": recipient,
+                "subject": f"[{lang_name}] Research: {query} & {topic}",
+                "body": f"Please find the translated research on {query} and {topic} below.",
+            }},
+        ],
+        "category": "multi_step",
+        "num_steps": 4,
+    }
+
+
+def make_multistep_4step_trip_plan(rng: random.Random) -> dict:
+    """4-step: book flight → book hotel → get directions → create calendar event."""
+    origin, dest = rng.sample(CITIES, 2)
+    dep = rng.choice(DATE_PATTERNS[:10])
+    ret = rng.choice(DATE_PATTERNS[15:25])
+    hotel = f"Grand Hotel {dest}"
+    event_title = f"Trip to {dest}"
+    time = rng.choice(TIME_PATTERNS[:6])
+    instructions = [
+        f"Plan my trip from {origin} to {dest}: book a flight on {dep}, reserve a hotel in {dest}, get driving directions, and add it to my calendar.",
+        f"I'm going to {dest} on {dep}. Book the flight from {origin}, find a hotel there, get directions around {dest}, and put the trip in my calendar.",
+        f"Help me plan: (1) book {origin}→{dest} flight for {dep}, (2) reserve a hotel in {dest}, (3) get directions, (4) create a calendar event.",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] in ("book_flight", "book_hotel", "get_directions", "create_calendar_event")],
+        "tool_calls": [
+            {"name": "book_flight", "arguments": {"origin": origin, "destination": dest, "departure_date": dep}},
+            {"name": "book_hotel", "arguments": {"hotel_name": hotel, "check_in": dep, "check_out": ret, "guests": 1}},
+            {"name": "get_directions", "arguments": {"origin": origin, "destination": dest, "mode": "driving"}},
+            {"name": "create_calendar_event", "arguments": {"title": event_title, "date": dep, "time": time}},
+        ],
+        "category": "multi_step",
+        "num_steps": 4,
+    }
+
+
+def make_multistep_5step_market_report(rng: random.Random) -> dict:
+    """5-step: stock price → stock history → exchange rate → calculate → email report."""
+    ticker = rng.choice(TICKERS)
+    from_c = "USD"
+    to_c = rng.choice(["EUR", "GBP", "JPY", "CAD"])
+    shares = rng.randint(10, 200)
+    start = rng.choice(DATE_PATTERNS[:5])
+    recipient = rng.choice(PEOPLE)
+    instructions = [
+        f"Build a market report for {ticker}: get current price, pull history from {start}, get {from_c}/{to_c} rate, compute value of {shares} shares in {to_c}, then email the report to {recipient}.",
+        f"For {shares} shares of {ticker}: fetch current price, historical data since {start}, {from_c}-to-{to_c} exchange rate, calculate total {to_c} value, then send the report to {recipient}.",
+        f"Compile a {ticker} report — price now, price history, {from_c}/{to_c} rate, {shares}-share valuation in {to_c} — and email it to {recipient}.",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] in (
+            "get_stock_price", "get_stock_history", "get_exchange_rate", "calculate", "send_email"
+        )],
+        "tool_calls": [
+            {"name": "get_stock_price", "arguments": {"symbol": ticker, "currency": from_c}},
+            {"name": "get_stock_history", "arguments": {"symbol": ticker, "start_date": start}},
+            {"name": "get_exchange_rate", "arguments": {"from_currency": from_c, "to_currency": to_c}},
+            {"name": "calculate", "arguments": {"expression": f"{shares} * price * rate"}},
+            {"name": "send_email", "arguments": {
+                "to": recipient,
+                "subject": f"Market report: {ticker} value in {to_c}",
+                "body": f"Attached is the market analysis for {shares} shares of {ticker} valued in {to_c}.",
+            }},
+        ],
+        "category": "multi_step",
+        "num_steps": 5,
+    }
+
+
+def make_multistep_5step_event_coordination(rng: random.Random) -> dict:
+    """5-step: weather forecast → create event → send email → set reminder → add task."""
+    city = rng.choice(CITIES)
+    date = rng.choice(DATE_PATTERNS[:10])
+    time = rng.choice(TIME_PATTERNS)
+    attendee = rng.choice(PEOPLE)
+    recipient = rng.choice([p for p in PEOPLE if p != attendee])
+    title = rng.choice(["Team Building Day", "Product Launch", "Annual Summit",
+                        "Hackathon", "Strategy Workshop"])
+    instructions = [
+        f"Plan '{title}' in {city} on {date}: check the forecast, create the calendar event, invite {recipient}, set a reminder, and add a prep task.",
+        f"Organise '{title}' in {city} ({date}): (1) weather forecast, (2) calendar event, (3) email invite to {recipient}, (4) reminder, (5) prep task.",
+        f"For '{title}' on {date} in {city}: forecast first, then calendar block, email {recipient}, reminder to prepare, and log a prep task.",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] in (
+            "get_weather_forecast", "create_calendar_event", "send_email", "set_reminder", "add_task"
+        )],
+        "tool_calls": [
+            {"name": "get_weather_forecast", "arguments": {"city": city, "days": 3, "units": "C"}},
+            {"name": "create_calendar_event", "arguments": {
+                "title": title, "date": date, "time": time, "attendees": [attendee],
+            }},
+            {"name": "send_email", "arguments": {
+                "to": recipient,
+                "subject": f"Invitation: {title} on {date}",
+                "body": f"You are invited to {title} in {city} on {date} at {time}.",
+            }},
+            {"name": "set_reminder", "arguments": {
+                "message": f"Prepare for {title}", "datetime": f"{date}T08:00:00",
+            }},
+            {"name": "add_task", "arguments": {"title": f"Prepare {title} materials", "priority": "high"}},
+        ],
+        "category": "multi_step",
+        "num_steps": 5,
+    }
+
+
 def make_ambiguous_weather_vs_news(rng: random.Random) -> dict:
     """Ambiguous: 'what's happening in X' — weather, not news."""
     city = rng.choice(CITIES)
@@ -895,6 +1421,153 @@ def make_ambiguous_search_vs_news(rng: random.Random) -> dict:
     }
 
 
+def make_ambiguous_weather_vs_forecast(rng: random.Random) -> dict:
+    """'What will the weather be' → forecast, not current conditions."""
+    city = rng.choice(CITIES)
+    days = rng.choice([3, 5, 7])
+    instructions = [
+        f"What will the weather be like in {city} next week?",
+        f"Is it going to rain in {city} this weekend?",
+        f"What should I expect weather-wise in {city} over the next {days} days?",
+        f"Will {city} be warm or cold in the coming days?",
+        f"Give me an idea of upcoming weather in {city}.",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] in ("get_weather", "get_weather_forecast")],
+        "tool_calls": [{"name": "get_weather_forecast", "arguments": {"city": city, "days": days, "units": "C"}}],
+        "category": "weather",
+        "num_steps": 1,
+    }
+
+
+def make_ambiguous_sms_vs_email(rng: random.Random) -> dict:
+    """Short 'message X' with a phone number context → SMS not email."""
+    phone = rng.choice(PHONE_NUMBERS)
+    msg = rng.choice([
+        "I'm on my way.", "Running late!", "Call me back.",
+        "See you soon.", "Just landed.", "At the entrance.",
+    ])
+    instructions = [
+        f"Message {phone}: {msg}",
+        f"Send a quick message to {phone} saying '{msg}'.",
+        f"Ping {phone} with: {msg}",
+        f"Drop a message to {phone}: {msg}",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] in ("send_email", "send_sms")],
+        "tool_calls": [{"name": "send_sms", "arguments": {"phone_number": phone, "message": msg}}],
+        "category": "communication",
+        "num_steps": 1,
+    }
+
+
+def make_ambiguous_task_vs_reminder(rng: random.Random) -> dict:
+    """Adding something to a list without a specific time → task, not a time-based reminder."""
+    tasks = ["Call the bank", "Return library books", "Fix that bug",
+             "Write unit tests", "Update resume", "Review budget"]
+    title = rng.choice(tasks)
+    priority = rng.choice(["medium", "high"])
+    instructions = [
+        f"Don't let me forget to {title.lower()}. Add it to my tasks.",
+        f"I need to {title.lower()} — put it on my list.",
+        f"Add '{title}' to my to-do list.",
+        f"Note to self: {title}. Add it as a task.",
+        f"Log '{title}' as something I need to do.",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] in ("set_reminder", "add_task")],
+        "tool_calls": [{"name": "add_task", "arguments": {"title": title, "priority": priority}}],
+        "category": "productivity",
+        "num_steps": 1,
+    }
+
+
+def make_ambiguous_convert_vs_rate(rng: random.Random) -> dict:
+    """Specific amount → convert_currency; asking for the rate only → get_exchange_rate."""
+    from_c, to_c = rng.sample(CURRENCIES[:10], 2)
+    amount = rng.choice([100, 500, 1000])
+    instructions = [
+        f"How much is {amount} {from_c} in {to_c}?",
+        f"If I have {amount} {from_c}, how much {to_c} is that?",
+        f"Convert {amount} {from_c} into {to_c}.",
+        f"I want to change {amount} {from_c} to {to_c}.",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] in ("get_exchange_rate", "convert_currency")],
+        "tool_calls": [{"name": "convert_currency", "arguments": {
+            "amount": amount, "from_currency": from_c, "to_currency": to_c,
+        }}],
+        "category": "finance",
+        "num_steps": 1,
+    }
+
+
+def make_ambiguous_stock_current_vs_history(rng: random.Random) -> dict:
+    """Historical price trend → get_stock_history; current snapshot → get_stock_price."""
+    ticker = rng.choice(TICKERS)
+    start = rng.choice(DATE_PATTERNS[:5])
+    instructions = [
+        f"Show me {ticker}'s performance over the past 3 months.",
+        f"How has {ticker} done since {start}?",
+        f"What were {ticker}'s prices last quarter?",
+        f"Give me {ticker}'s price history.",
+        f"I want to see how {ticker} trended from {start}.",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] in ("get_stock_price", "get_stock_history")],
+        "tool_calls": [{"name": "get_stock_history", "arguments": {
+            "symbol": ticker, "start_date": start,
+        }}],
+        "category": "finance",
+        "num_steps": 1,
+    }
+
+
+def make_ambiguous_music_vs_podcast(rng: random.Random) -> dict:
+    """Podcast show name → play_podcast; artist/song → play_music."""
+    show = rng.choice(PODCAST_SHOWS)
+    instructions = [
+        f"Play {show}.",
+        f"I want to listen to {show}.",
+        f"Put on {show}.",
+        f"Start {show} for me.",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] in ("play_music", "play_podcast")],
+        "tool_calls": [{"name": "play_podcast", "arguments": {"show_name": show}}],
+        "category": "entertainment",
+        "num_steps": 1,
+    }
+
+
+def make_ambiguous_calculate_vs_run_code(rng: random.Random) -> dict:
+    """Code with logic/imports → run_code; pure arithmetic expression → calculate."""
+    snippets = [
+        ("python", "import statistics; print(statistics.mean([10, 20, 30, 40]))"),
+        ("python", "print(sorted({'a': 3, 'b': 1, 'c': 2}.items(), key=lambda x: x[1]))"),
+        ("javascript", "console.log([1,2,3,4,5].reduce((a,b) => a+b, 0))"),
+    ]
+    lang, code = rng.choice(snippets)
+    instructions = [
+        f"Calculate the result of this {lang} program: {code}",
+        f"Compute this: {code}",
+        f"Run and give me the output of: {code}",
+    ]
+    return {
+        "instruction": rng.choice(instructions),
+        "tools": [t for t in TOOLS if t["name"] in ("calculate", "run_code")],
+        "tool_calls": [{"name": "run_code", "arguments": {"code": code, "language": lang}}],
+        "category": "code",
+        "num_steps": 1,
+    }
+
+
 # ── Main generator ─────────────────────────────────────────────────────────────
 
 SINGLE_GENERATORS_WEIGHTS = [
@@ -910,10 +1583,26 @@ SINGLE_GENERATORS_WEIGHTS = [
     (make_music_example, 2),
     (make_directions_example, 3),
     (make_send_email_example, 3),
-    # Ambiguous examples — model must discriminate between similar tools
+    (make_weather_forecast_example, 3),
+    (make_search_news_example, 3),
+    (make_send_sms_example, 3),
+    (make_book_flight_example, 3),
+    (make_stock_history_example, 3),
+    (make_add_task_example, 3),
+    (make_convert_currency_example, 3),
+    (make_place_details_example, 2),
+    (make_play_podcast_example, 2),
+    (make_run_code_example, 3),
     (make_ambiguous_weather_vs_news, 2),
     (make_ambiguous_calculate_vs_convert, 2),
     (make_ambiguous_search_vs_news, 2),
+    (make_ambiguous_weather_vs_forecast, 3),
+    (make_ambiguous_sms_vs_email, 3),
+    (make_ambiguous_task_vs_reminder, 3),
+    (make_ambiguous_convert_vs_rate, 3),
+    (make_ambiguous_stock_current_vs_history, 3),
+    (make_ambiguous_music_vs_podcast, 3),
+    (make_ambiguous_calculate_vs_run_code, 3),
 ]
 
 MULTI_GENERATORS_WEIGHTS = [
@@ -927,23 +1616,33 @@ MULTI_GENERATORS_WEIGHTS = [
     (make_multistep_calendar_email_reminder, 3),
     (make_multistep_search_translate_email, 2),
     (make_multistep_stock_exchange_calculate, 2),
+    # 4-step chains
+    (make_multistep_4step_research_email, 3),
+    (make_multistep_4step_trip_plan, 3),
+    # 5-step chains
+    (make_multistep_5step_market_report, 2),
+    (make_multistep_5step_event_coordination, 2),
 ]
 
-# 65% single, 35% multi-step (up from 30% to give model more chain exposure)
+# 50% single, 50% multi-step — more long-horizon chains to raise the difficulty ceiling
 ALL_GENERATORS = (
-    [(g, w * 65) for g, w in SINGLE_GENERATORS_WEIGHTS] +
-    [(g, w * 35) for g, w in MULTI_GENERATORS_WEIGHTS]
+    [(g, w * 50) for g, w in SINGLE_GENERATORS_WEIGHTS] +
+    [(g, w * 50) for g, w in MULTI_GENERATORS_WEIGHTS]
 )
 
 
 def _add_distractor_tools(example: dict, rng: random.Random) -> None:
-    """Inject 3-5 distractor tools so the model must select from a candidate set."""
+    """Expose the full tool catalogue so the model must select from all 25 available tools.
+
+    With the expanded tool set containing 10 near-duplicate pairs (e.g. get_weather vs
+    get_weather_forecast, send_email vs send_sms, add_task vs set_reminder …) the baseline
+    model must understand fine-grained semantic differences to pick correctly — pushing
+    baseline tool-selection accuracy well below 40% and giving GRPO a strong learning signal.
+    """
     needed = {t["name"] for t in example.get("tools", [])}
     distractors = [t for t in TOOLS if t["name"] not in needed]
-    n = rng.randint(3, min(5, len(distractors)))
-    extra = rng.sample(distractors, n)
-    # Shuffle so the correct tool isn't always first
-    all_tools = example["tools"] + extra
+    # Always include ALL tools — no random sub-sampling
+    all_tools = example["tools"] + distractors
     rng.shuffle(all_tools)
     example["tools"] = all_tools
 

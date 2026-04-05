@@ -174,7 +174,7 @@ if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
         --num-epochs 3 \
         --max-seq-length 2048 \
         --logging-steps 10 \
-        --save-steps 25 \
+        --save-steps 500 \
         $DRY_RUN_ARGS
 
     _require_file "$SFT_OUTPUT/checkpoints.jsonl" "SFT training did not produce checkpoints.jsonl"
@@ -220,7 +220,7 @@ if [[ "$STAGE" == "grpo" || "$STAGE" == "all" ]]; then
         --batch-size 16 \
         --group-size 8 \
         --max-steps 50 \
-        --save-steps 10 \
+        --save-steps 17 \
         $DRY_RUN_ARGS
 
     _require_file "$GRPO_OUTPUT/checkpoints.jsonl" "GRPO training did not produce checkpoints.jsonl"
