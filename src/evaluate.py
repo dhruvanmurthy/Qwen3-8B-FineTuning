@@ -259,6 +259,17 @@ def _read_last_sampler_path(log_dir: str) -> Optional[str]:
     return last
 
 
+def _save_checkpoint(checkpoint_file: str, data: Dict[str, Any]) -> None:
+    """Atomically write checkpoint data to JSON so partial results survive a crash."""
+    path = Path(checkpoint_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    tmp.replace(path)
+    logger.debug("Checkpoint saved to %s", checkpoint_file)
+
+
 # -----------------------------------------------------------------------
 # Core evaluator  (async — all inference on Tinker)
 # -----------------------------------------------------------------------
@@ -266,13 +277,30 @@ def _read_last_sampler_path(log_dir: str) -> Optional[str]:
 class ToolUseEvaluator:
     """Evaluate a single model on tool-use benchmarks via Tinker inference."""
 
-    def __init__(self, sampling_client, renderer, label: str = "model"):
+    def __init__(self, sampling_client, renderer, label: str = "model",
+                 checkpoint_file: Optional[str] = None,
+                 checkpoint_data: Optional[Dict[str, Any]] = None):
         self.sampling_client = sampling_client
         self.renderer = renderer
         self.label = label
         self.results: Dict[str, float] = {}
+        self.checkpoint_file = checkpoint_file
+        self._all_checkpoint_data: Dict[str, Any] = checkpoint_data if checkpoint_data is not None else {}
+        # Pre-populate results from checkpoint if this stage was partially completed
+        if label in self._all_checkpoint_data:
+            self.results = dict(self._all_checkpoint_data[label])
+            logger.info("[%s] Resumed %d benchmark result(s) from checkpoint", label, len(self.results))
 
     SYSTEM_PROMPT = TOOL_USE_SYSTEM_PROMPT
+
+    # Maps benchmark name -> primary result key used to detect completion in checkpoints
+    _BENCHMARK_RESULT_KEYS: Dict[str, str] = {
+        "tool_selection": "tool_selection_accuracy",
+        "argument_accuracy": "argument_accuracy",
+        "schema_compliance": "schema_compliance",
+        "multi_step": "multi_step_success",
+        "latency": "avg_latency_ms",
+    }
 
     # --- generation ---
 
@@ -628,7 +656,16 @@ class ToolUseEvaluator:
         for name in to_run:
             if name not in _map:
                 raise ValueError(f"Unknown benchmark '{name}'. Choose from: {_all}")
+            # Skip if already completed in a previous run (checkpoint resume)
+            primary_key = self._BENCHMARK_RESULT_KEYS.get(name)
+            if primary_key and primary_key in self.results:
+                logger.info("[%s] Skipping '%s' — already in checkpoint", self.label, name)
+                continue
             await _map[name]()
+            # Save after each benchmark so a crash loses at most one benchmark's work
+            if self.checkpoint_file:
+                self._all_checkpoint_data[self.label] = dict(self.results)
+                _save_checkpoint(self.checkpoint_file, self._all_checkpoint_data)
         # Log all aggregate metrics to W&B summary for this stage
         for k, v in self.results.items():
             wandb.summary[f"{self.label}/{k}"] = v
@@ -686,9 +723,10 @@ def main():
     parser = argparse.ArgumentParser(description="Three-stage evaluation (Tinker inference)")
     parser.add_argument(
         "--mode",
-        choices=["baseline", "sft", "grpo", "compare", "all"],
+        choices=["baseline", "sft", "grpo", "compare", "all", "fetch-compare"],
         default="all",
-        help="Which stage(s) to evaluate",
+        help="Which stage(s) to evaluate. Use 'fetch-compare' to build the "
+             "comparison table from already-completed W&B runs without any inference.",
     )
     parser.add_argument("--base-model", default="Qwen/Qwen3-8B",
                         help="HF model ID used for baseline Tinker inference")
@@ -718,13 +756,140 @@ def main():
         help="Subset of benchmarks to run: tool_selection argument_accuracy "
              "schema_compliance multi_step latency. Default: all.",
     )
+    parser.add_argument(
+        "--checkpoint-file",
+        default="outputs/eval_checkpoint.json",
+        help="Path to checkpoint file for saving/resuming partial results. "
+             "Delete this file to start a fresh run.",
+    )
+    # fetch-compare: pull results from existing completed W&B runs (no inference)
+    parser.add_argument(
+        "--baseline-run-path",
+        default=None,
+        metavar="ENTITY/PROJECT/RUN_ID",
+        help="W&B run path for a completed baseline eval run (fetch-compare mode).",
+    )
+    parser.add_argument(
+        "--sft-run-path",
+        default=None,
+        metavar="ENTITY/PROJECT/RUN_ID",
+        help="W&B run path for a completed SFT eval run (fetch-compare mode).",
+    )
+    parser.add_argument(
+        "--grpo-run-path",
+        default=None,
+        metavar="ENTITY/PROJECT/RUN_ID",
+        help="W&B run path for a completed GRPO eval run (fetch-compare mode).",
+    )
     args = parser.parse_args()
 
-    asyncio.run(_run_eval(args))
+    if args.mode == "fetch-compare":
+        _fetch_compare(args)
+    else:
+        asyncio.run(_run_eval(args))
+
+
+def _fetch_compare(args) -> None:
+    """Build a comparison table from already-completed W&B eval runs.
+
+    Pulls summary metrics from existing runs via the W&B API — no Tinker
+    inference is performed.  Useful when individual stage eval runs completed
+    successfully but the combined 'compare' run crashed.
+
+    Usage:
+        python src/evaluate.py --mode fetch-compare \\
+            --baseline-run-path  ENTITY/PROJECT/RUN_ID \\
+            --sft-run-path       ENTITY/PROJECT/RUN_ID \\
+            --grpo-run-path      ENTITY/PROJECT/RUN_ID \\
+            --output outputs/eval_comparison.json
+    """
+    api = wandb.Api()
+
+    stage_run_paths: Dict[str, str] = {}
+    if args.baseline_run_path:
+        stage_run_paths["baseline"] = args.baseline_run_path
+    if args.sft_run_path:
+        stage_run_paths["sft"] = args.sft_run_path
+    if args.grpo_run_path:
+        stage_run_paths["grpo"] = args.grpo_run_path
+
+    if not stage_run_paths:
+        raise RuntimeError(
+            "fetch-compare requires at least one of: "
+            "--baseline-run-path, --sft-run-path, --grpo-run-path"
+        )
+
+    all_results: Dict[str, Dict[str, float]] = {}
+    for stage, run_path in stage_run_paths.items():
+        logger.info("Fetching W&B summary for stage '%s' from run: %s", stage, run_path)
+        run = api.run(run_path)
+        summary = dict(run.summary)
+        # Metrics are logged as "{stage}/metric_name" — strip the prefix
+        prefix = f"{stage}/"
+        metrics = {
+            k[len(prefix):]: float(v)
+            for k, v in summary.items()
+            if k.startswith(prefix) and isinstance(v, (int, float))
+        }
+        if not metrics:
+            raise RuntimeError(
+                f"No metrics found for stage '{stage}' in run {run_path}. "
+                f"Available summary keys: {[k for k in summary if not k.startswith('_')]}"
+            )
+        all_results[stage] = metrics
+        logger.info("  Got %d metrics: %s", len(metrics), list(metrics.keys()))
+
+    compare_stages(all_results)
+
+    # Save combined results locally
+    os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
+    with open(args.output, "w") as f:
+        json.dump(all_results, f, indent=2)
+    logger.info("Combined results saved to %s", args.output)
+
+    # Log a new W&B run with the comparison table so it appears in the project
+    wandb.init(
+        project=os.getenv("WANDB_PROJECT", "qwen3-8b-tool-use"),
+        entity=os.getenv("WANDB_ENTITY") or None,
+        name=f"eval-compare-{args.base_model.split('/')[-1]}",
+        tags=["evaluation", "compare", "tool-use", "fetch-compare"],
+        config={
+            "base_model": args.base_model,
+            "mode": "fetch-compare",
+            "source_runs": stage_run_paths,
+        },
+        mode="disabled" if not os.getenv("WANDB_API_KEY") else "online",
+    )
+    metrics_list = list(next(iter(all_results.values())).keys())
+    stages = list(all_results.keys())
+    comparison_table = wandb.Table(columns=["metric"] + stages)
+    for metric in metrics_list:
+        row = [metric] + [all_results[stage].get(metric, float("nan")) for stage in stages]
+        comparison_table.add_data(*row)
+    wandb.log({"eval/comparison_table": comparison_table})
+    # Also log flat summary metrics for easy charting
+    for stage, results in all_results.items():
+        wandb.log({f"{stage}/{k}": v for k, v in results.items()})
+    wandb.save(args.output)
+    wandb.finish()
+    logger.info("Comparison run logged to W&B.")
 
 
 async def _run_eval(args) -> None:
     """Async evaluation loop — all inference on Tinker."""
+
+    # ---- Checkpoint: load any existing partial results ----
+    checkpoint_file: str = args.checkpoint_file
+    checkpoint_data: Dict[str, Any] = {}
+    ckpt_path = Path(checkpoint_file)
+    if ckpt_path.exists():
+        try:
+            with open(ckpt_path, "r", encoding="utf-8") as f:
+                checkpoint_data = json.load(f)
+            logger.info("Loaded checkpoint from %s — stages present: %s",
+                        checkpoint_file, list(checkpoint_data.keys()))
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("Could not load checkpoint %s (%s) — starting fresh", checkpoint_file, exc)
 
     # ---- Tinker service client ----
     if not os.getenv("TINKER_API_KEY"):
@@ -780,27 +945,55 @@ async def _run_eval(args) -> None:
         tokenizer = sc.get_tokenizer()
         renderer_name = get_recommended_renderer_name(args.base_model)
         renderer = get_renderer(renderer_name, tokenizer)
-        return ToolUseEvaluator(sc, renderer, label=label)
+        return ToolUseEvaluator(sc, renderer, label=label,
+                                checkpoint_file=checkpoint_file,
+                                checkpoint_data=checkpoint_data)
+
+    # Determine which result keys are required for the benchmarks being run
+    _benchmarks_to_run = args.benchmarks or list(ToolUseEvaluator._BENCHMARK_RESULT_KEYS.keys())
+    _required_keys = [
+        ToolUseEvaluator._BENCHMARK_RESULT_KEYS[b]
+        for b in _benchmarks_to_run
+        if b in ToolUseEvaluator._BENCHMARK_RESULT_KEYS
+    ]
+
+    def _stage_complete(stage: str) -> bool:
+        """True if all requested benchmarks already have results in the checkpoint."""
+        return stage in checkpoint_data and all(
+            k in checkpoint_data[stage] for k in _required_keys
+        )
 
     all_results: Dict[str, Dict[str, float]] = {}
 
     # --- baseline ---
     if args.mode in ("baseline", "compare", "all"):
-        logger.info(">>> Baseline evaluation")
-        ev = await _make_evaluator("baseline")
-        all_results["baseline"] = await ev.evaluate_all(examples, benchmarks=args.benchmarks)
+        if _stage_complete("baseline"):
+            logger.info(">>> Baseline: all benchmarks complete in checkpoint — skipping")
+            all_results["baseline"] = checkpoint_data["baseline"]
+        else:
+            logger.info(">>> Baseline evaluation")
+            ev = await _make_evaluator("baseline")
+            all_results["baseline"] = await ev.evaluate_all(examples, benchmarks=args.benchmarks)
 
     # --- SFT ---
     if args.mode in ("sft", "compare", "all"):
-        logger.info(">>> SFT evaluation  (sampler: %s)", sft_sampler)
-        ev = await _make_evaluator("sft", model_path=sft_sampler)
-        all_results["sft"] = await ev.evaluate_all(examples, benchmarks=args.benchmarks)
+        if _stage_complete("sft"):
+            logger.info(">>> SFT: all benchmarks complete in checkpoint — skipping")
+            all_results["sft"] = checkpoint_data["sft"]
+        else:
+            logger.info(">>> SFT evaluation  (sampler: %s)", sft_sampler)
+            ev = await _make_evaluator("sft", model_path=sft_sampler)
+            all_results["sft"] = await ev.evaluate_all(examples, benchmarks=args.benchmarks)
 
     # --- GRPO ---
     if args.mode in ("grpo", "compare", "all"):
-        logger.info(">>> GRPO evaluation  (sampler: %s)", grpo_sampler)
-        ev = await _make_evaluator("grpo", model_path=grpo_sampler)
-        all_results["grpo"] = await ev.evaluate_all(examples, benchmarks=args.benchmarks)
+        if _stage_complete("grpo"):
+            logger.info(">>> GRPO: all benchmarks complete in checkpoint — skipping")
+            all_results["grpo"] = checkpoint_data["grpo"]
+        else:
+            logger.info(">>> GRPO evaluation  (sampler: %s)", grpo_sampler)
+            ev = await _make_evaluator("grpo", model_path=grpo_sampler)
+            all_results["grpo"] = await ev.evaluate_all(examples, benchmarks=args.benchmarks)
 
     # --- comparison table ---
     if len(all_results) > 1:

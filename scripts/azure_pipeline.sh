@@ -221,21 +221,43 @@ if [ "$DETACH" = "true" ]; then
 fi
 
 echo ">>> Container started. Streaming logs (Ctrl+C to detach — container keeps running)..."
-_run az container logs \
-    --resource-group "$RESOURCE_GROUP" \
-    --name "$CONTAINER_NAME" \
-    --follow || true
+# Retry log streaming up to 3 times — the follow API can return a transient 500.
+if [ "$DRY_RUN" = "false" ]; then
+    for _log_attempt in 1 2 3; do
+        az container logs \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$CONTAINER_NAME" \
+            --follow && break || {
+            echo "    Log stream attempt ${_log_attempt} failed — retrying in 15 s..."
+            sleep 15
+        }
+    done
+fi
 
 # ---- Step 6: Wait for container to finish ----------------------------------
 if [ "$DRY_RUN" = "false" ]; then
     echo ""
     echo ">>> Step 6: Waiting for container to reach terminal state..."
-    az container wait \
-        --resource-group "$RESOURCE_GROUP" \
-        --name "$CONTAINER_NAME" \
-        --custom "instanceView.state=='Terminated'" \
-        --interval 30 \
-        --timeout 28800  # 8h max
+    # az container wait is not available in all CLI versions; poll with az container show.
+    _WAIT_TIMEOUT=28800  # 8 h
+    _WAIT_INTERVAL=30
+    _WAIT_ELAPSED=0
+    while true; do
+        _CONTAINER_STATE=$(az container show \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$CONTAINER_NAME" \
+            --query "instanceView.state" \
+            --output tsv 2>/dev/null || echo "Unknown")
+        if [[ "$_CONTAINER_STATE" == "Terminated" || "$_CONTAINER_STATE" == "Stopped" || "$_CONTAINER_STATE" == "Failed" ]]; then
+            break
+        fi
+        if [ "$_WAIT_ELAPSED" -ge "$_WAIT_TIMEOUT" ]; then
+            echo ">>> Timed out (${_WAIT_TIMEOUT}s) waiting for container to terminate."
+            break
+        fi
+        sleep "$_WAIT_INTERVAL"
+        _WAIT_ELAPSED=$((_WAIT_ELAPSED + _WAIT_INTERVAL))
+    done
 
     EXIT_CODE=$(az container show \
         --resource-group "$RESOURCE_GROUP" \
