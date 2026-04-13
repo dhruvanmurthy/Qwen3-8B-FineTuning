@@ -1,214 +1,139 @@
-# Qwen3-8B Fine-tuning for Tool Use (Function Calling)
+# Qwen3-8B Fine-Tuning for Tool Use
 
-A cost-efficient, reproducible MLOps project for fine-tuning Qwen3-8B on multi-step tool use, API calling, and function chaining.
+This repository fine-tunes `Qwen/Qwen3-8B` for structured tool use with a
+Tinker-based pipeline:
 
-## Project Goals
+1. Baseline evaluation
+2. SFT training with LoRA
+3. GRPO training on top of the SFT checkpoint
+4. Cross-stage evaluation and comparison
 
-- **Model**: Qwen3-8B (8B parameters, fast inference)
-- **Task**: Multi-step tool use & function calling
-- **Pipeline**: 3-stage — Baseline eval → SFT (LoRA) → GRPO (RL with binary rewards)
-- **Training**: Remote GPU training via [Tinker](https://tinker.thinkingmachines.ai/) — no local GPU required
-- **Reproducibility**: Full tracking via W&B, versioned datasets, seed control
+The current source of truth is the implementation in:
 
-## Key Metrics
+- `scripts/run_pipeline.sh`
+- `src/train.py`
+- `src/train_grpo.py`
+- `src/evaluate.py`
 
-| Metric | Baseline | SFT Target | GRPO Target |
-|--------|----------|------------|-------------|
-| Tool Selection Accuracy | ~65% | >85% | **>90%** |
-| Argument Correctness | ~50% | >75% | **>85%** |
-| Multi-step Success Rate | ~40% | >70% | **>80%** |
-| Schema Compliance | ~40% | >80% | **>90%** |
+## What Is In Scope
 
-## Project Structure
+- Synthetic tool-use data generation
+- Dataset preparation and tokenization
+- Remote training and evaluation through Tinker
+- W&B logging
+- Optional Hugging Face Hub uploads for SFT and GRPO adapters
 
-```
+## Repository Layout
+
+```text
 Qwen3-8B-FineTuning/
-├── README.md                          # This file
-├── GETTING_STARTED.md                 # Step-by-step local guide
-├── EXECUTION_PLAN.md                  # Phase-by-phase execution plan
-├── MODEL_CARD.md                      # Model documentation
-├── DATASET_CARD.md                    # Dataset documentation
-├── CONTRIBUTING.md                    # Contribution guidelines
-├── requirements.txt                   # Python dependencies
-├── .env.example                       # Environment variables template
-│
-├── docs/
-│   ├── TRAINING_PLAN.md              # 3-stage training strategy
-│   ├── DATASET_STRATEGY.md           # Data pipeline & aggregation
-│   ├── EVALUATION.md                 # 3-stage evaluation methodology
-│   └── TROUBLESHOOTING.md            # Common issues & fixes
-│
-├── configs/
-│   └── dataset_config.yaml           # Dataset pipeline config
-│
-├── src/
-│   ├── __init__.py
-│   ├── constants.py                  # Shared constants (TOOL_USE_SYSTEM_PROMPT)
-│   ├── data_loader.py                # Dataset loading, preprocessing, GRPO prompt prep
-│   ├── train.py                      # Stage 1: SFT training (via Tinker)
-│   ├── train_grpo.py                 # Stage 2: GRPO training (via Tinker)
-│   ├── rewards.py                    # Reward functions, tool-call extraction, composite scorer
-│   ├── environments.py               # Reward environment for GRPO
-│   └── evaluate.py                   # 3-stage evaluation (baseline/SFT/GRPO)
-│
-├── scripts/
-│   ├── run_pipeline.sh               # 3-stage orchestrator (main entry point)
-│   ├── prepare_datasets.sh           # Download & process datasets
-│   ├── run_local_training.sh         # SFT training via Tinker
-│   ├── evaluate_model.sh             # Run evaluation
-│   ├── run_smoke_test.sh             # End-to-end smoke test (real Tinker, mini data)
-│   └── generate_synthetic.py         # Synthetic data generation
-│
-├── data/
-│   ├── raw/                          # Downloaded raw datasets
-│   └── processed/                    # Processed, formatted datasets
-│
-├── .github/
-│   └── workflows/
-│       ├── test.yml                  # CI/CD testing
-│       └── release.yml               # Model release to HF Hub
-│
-└── wandb/                            # W&B run logs (gitignored)
+|- README.md
+|- GETTING_STARTED.md
+|- EXECUTION_PLAN.md
+|- CONTRIBUTING.md
+|- MODEL_CARD.md
+|- DATASET_CARD.md
+|- configs/
+|  \- dataset_config.yaml
+|- docs/
+|  |- TRAINING_PLAN.md
+|  |- EVALUATION.md
+|  |- DATASET_STRATEGY.md
+|  \- TROUBLESHOOTING.md
+|- scripts/
+|  |- prepare_datasets.sh
+|  |- run_pipeline.sh
+|  |- run_local_training.sh
+|  |- run_smoke_test.sh
+|  |- evaluate_model.sh
+|  |- generate_synthetic.py
+|  |- push_dataset_to_hub.py
+|  \- push_model_to_hub.py
+|- src/
+|  |- data_loader.py
+|  |- constants.py
+|  |- rewards.py
+|  |- train.py
+|  |- train_grpo.py
+|  \- evaluate.py
+\- .github/workflows/
+   |- test.yml
+   \- release.yml
 ```
 
 ## Quick Start
 
-### Local (see [GETTING_STARTED.md](GETTING_STARTED.md) for details)
+The shell scripts are written for Bash. On Windows, use WSL or another Bash
+environment to run the `scripts/*.sh` entrypoints.
 
 ```bash
-# 1. Setup
 pip install -r requirements.txt
-cp .env.example .env   # edit with your HF_TOKEN, WANDB_API_KEY
+cp .env.example .env
 
-# 2. Prepare data
+# Generate data and prepare tokenized splits
 bash scripts/prepare_datasets.sh
 
-# 3. Run entire pipeline (baseline → SFT → GRPO → compare)
+# Run the full remote pipeline
 bash scripts/run_pipeline.sh all
-
-# Or run stages individually:
-bash scripts/run_pipeline.sh baseline   # Evaluate base model
-bash scripts/run_pipeline.sh sft        # Train SFT
-bash scripts/run_pipeline.sh grpo       # Train GRPO (requires SFT output)
-bash scripts/run_pipeline.sh compare    # Side-by-side comparison
 ```
 
-### Smoke Test (Mini End-to-End)
+Useful stage-specific commands:
 
 ```bash
-# Run a quick end-to-end test with real Tinker training on minimal data
+bash scripts/run_pipeline.sh baseline
+bash scripts/run_pipeline.sh sft
+bash scripts/run_pipeline.sh grpo
+bash scripts/run_pipeline.sh compare
+```
+
+## Local Validation Without Remote Training
+
+If you want to validate wiring without spending Tinker time, the canonical
+pipeline supports a dry-run mode:
+
+```bash
+LOCAL_VALIDATE=true bash scripts/run_pipeline.sh all
+```
+
+This skips remote inference and training, switches the default base model to
+`sshleifer/tiny-gpt2`, and validates the local pipeline structure.
+
+## Smoke Test
+
+For a smaller real end-to-end integration run against Tinker:
+
+```bash
 bash scripts/run_smoke_test.sh
 ```
+
+The smoke test uses a reduced synthetic dataset and evaluates a small benchmark
+subset focused on output shape and multi-step chaining.
+
+## Outputs
+
+The current pipeline writes to:
+
+- `outputs/sft/` for SFT checkpoints
+- `outputs/grpo/` for GRPO checkpoints
+- `outputs/eval_*.json` for evaluation results
+- `data/processed/` for tokenized datasets
+- `data/processed/test_raw.jsonl` for structured evaluation examples
 
 ## Documentation
 
-- **[GETTING_STARTED.md](GETTING_STARTED.md)** — Full local setup and run guide
-- **[docs/TRAINING_PLAN.md](docs/TRAINING_PLAN.md)** — 3-stage training strategy and hyperparameters
-- **[docs/DATASET_STRATEGY.md](docs/DATASET_STRATEGY.md)** — Dataset sourcing, aggregation, GRPO prompt prep
-- **[docs/EVALUATION.md](docs/EVALUATION.md)** — 3-stage evaluation metrics and comparison
-- **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** — Common errors and solutions (incl. GRPO)
-- **[MODEL_CARD.md](MODEL_CARD.md)** — Model capabilities, limitations, license
-- **[DATASET_CARD.md](DATASET_CARD.md)** — Dataset composition, sources, licenses
+- [GETTING_STARTED.md](GETTING_STARTED.md): local setup and first run
+- [EXECUTION_PLAN.md](EXECUTION_PLAN.md): phase-by-phase execution checklist
+- [docs/TRAINING_PLAN.md](docs/TRAINING_PLAN.md): current training flow and defaults
+- [docs/EVALUATION.md](docs/EVALUATION.md): benchmarks, commands, and outputs
+- [docs/DATASET_STRATEGY.md](docs/DATASET_STRATEGY.md): data generation and preparation
+- [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md): common issues in the current stack
 
-## Key Technologies
+## Notes
 
-| Component | Tool | Purpose |
-|-----------|------|---------|
-| **Model** | Qwen3-8B (HF Hub) | Base LLM |
-| **Training** | [Tinker](https://tinker.thinkingmachines.ai/) | Remote GPU training (SFT + GRPO) |
-| **SFT** | LoRA fine-tuning via Tinker | Stage 1: supervised fine-tuning |
-| **GRPO** | Group Relative Policy Optimization | Stage 2: RL with binary rewards |
-| **Rewards** | Custom binary verifiers | Tool-use correctness signals |
-| **Tracking** | Weights & Biases | Experiment logging |
-| **Versioning** | Git | Code version control |
-| **Models** | Hugging Face Hub | Model distribution |
-
-## Estimated Training Time
-
-| Stage | Method | Approx. Time |
-|-------|--------|--------------|
-| Baseline | Eval only (Tinker inference) | ~30 min |
-| SFT | LoRA via Tinker | ~6-18h |
-| GRPO | LoRA + GRPO via Tinker | ~1-4h |
-
-## Security & Reproducibility
-
-- **Secrets**: `.env` (git-ignored)
-- **Seeds**: Fixed global seed (42) for all stages
-- **Deps**: Pinned versions in `requirements.txt`
-- **Data**: Versioned datasets on HF Hub
-- **Tracking**: W&B artifacts with reproducible runs
-
-## Experiment Tracking
-
-All training runs logged to **Weights & Biases**:
-```
-wandb.ai/dhruvanmurthy/qwen3-8b-tool-use
-```
-
-Tracks learning curves, loss metrics, reward signals (GRPO), evaluation tables, and GPU utilization across all three stages.
-
-## Development Workflow
-
-```bash
-# 1. Create feature branch
-git checkout -b feature/my-improvement
-
-# 2. Make changes, run smoke test
-bash scripts/run_smoke_test.sh
-
-# 3. Commit and push
-git add .
-git commit -m "feat: add new evaluation metric"
-git push origin feature/my-improvement
-
-# 4. Create PR, merge after review
-
-# 5. Release model to HF Hub (automatic via GitHub Actions)
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-## Model Distribution
-
-Fine-tuned adapters available at:
-- **SFT adapter**: `dhruvanmurthy/qwen3-8b-tool-use-sft-lora`
-- **GRPO adapter**: `dhruvanmurthy/qwen3-8b-tool-use-grpo-lora`
-
-```python
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import PeftModel
-
-base = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-8B")
-# Load SFT adapter
-sft_model = PeftModel.from_pretrained(base, "dhruvanmurthy/qwen3-8b-tool-use-sft-lora")
-# Or load GRPO (must merge SFT first)
-merged = sft_model.merge_and_unload()
-grpo_model = PeftModel.from_pretrained(merged, "dhruvanmurthy/qwen3-8b-tool-use-grpo-lora")
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B")
-```
-
-## Troubleshooting
-
-See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for solutions to:
-- GPU memory overflow (SFT and GRPO)
-- GRPO rewards stuck at zero
-- TRL version compatibility
-- Training instability
-- Tinker connection issues
-
-## License
-
-- **Code**: MIT License (see LICENSE file)
-- **Model**: Same as Qwen3-8B base model (Apache 2.0)
-- **Datasets**: Mixed (see DATASET_CARD.md for attribution)
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## Contact
-
-**Author**: Dhruva N
-**GitHub**: [@dhruvanmurthy](https://github.com/dhruvanmurthy)
-**HuggingFace**: [dhruvanmurthy](https://huggingface.co/dhruvanmurthy)
+- Real training and evaluation require `TINKER_API_KEY`.
+- W&B logging is enabled when `WANDB_API_KEY` is present and otherwise runs in
+  disabled mode.
+- Hugging Face uploads are attempted only when both `HF_TOKEN` and
+  `HF_REPO_ID` are configured.
+- The canonical GRPO path starts from an SFT checkpoint and should use the same
+  LoRA rank as the SFT stage when resuming that checkpoint.

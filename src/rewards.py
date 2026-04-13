@@ -1,11 +1,12 @@
 """
-Binary verifiable reward functions for tool-use GRPO training.
+Programmatic reward functions for tool-use GRPO training.
 
-Each function follows TRL GRPOTrainer's reward function interface:
+Reward functions use the same call signature throughout the Tinker-based
+training loop:
     reward_fn(completions: list[str], **kwargs) -> list[float]
 
-All rewards are binary: 1.0 (correct) or 0.0 (incorrect).
-No learned reward models — only programmatic verification.
+The individual signals are fully deterministic. Some are binary and some use
+partial credit to provide a smoother training signal.
 """
 
 import json
@@ -98,7 +99,7 @@ def extract_tool_calls(text: str) -> List[Dict]:
 
 
 # ---------------------------------------------------------------------------
-# Binary reward functions (GRPOTrainer-compatible)
+# Reward functions
 # ---------------------------------------------------------------------------
 
 def tool_name_reward(
@@ -117,44 +118,6 @@ def tool_name_reward(
             rewards.append(1.0)
         else:
             rewards.append(0.0)
-    return rewards
-
-
-def argument_match_reward(
-    completions: list[str],
-    expected_args: list[str] | None = None,
-    **kwargs,
-) -> list[float]:
-    """1.0 if predicted arguments exactly match expected, else 0.0."""
-    if expected_args is None:
-        return [0.0] * len(completions)
-
-    rewards = []
-    for completion, expected_str in zip(completions, expected_args):
-        call = extract_tool_call(completion)
-        if call is None:
-            rewards.append(0.0)
-            continue
-
-        try:
-            expected = (
-                json.loads(expected_str)
-                if isinstance(expected_str, str)
-                else expected_str
-            )
-        except (json.JSONDecodeError, TypeError):
-            rewards.append(0.0)
-            continue
-
-        pred_args = call.get("arguments", call.get("parameters", {}))
-        if isinstance(pred_args, str):
-            try:
-                pred_args = json.loads(pred_args)
-            except json.JSONDecodeError:
-                rewards.append(0.0)
-                continue
-
-        rewards.append(1.0 if pred_args == expected else 0.0)
     return rewards
 
 
@@ -333,8 +296,9 @@ def compute_rewards(
 ) -> "list[float] | tuple[list[float], dict[str, list[float]]]":
     """Compute average of all applicable reward signals.
 
-    Uses F1-based argument scoring and partial chain credit to provide a
-    smoother gradient signal compared to strict binary matching.
+    Uses exact schema and tool checks plus partial-credit scoring for argument
+    and chain quality to provide a smoother gradient signal than strict
+    all-or-nothing matching.
 
     Args:
         completions: List of completion strings to grade.

@@ -171,7 +171,8 @@ if [[ "$STAGE" == "baseline" || "$STAGE" == "all" ]]; then
         --benchmarks $SMOKE_BENCHMARKS \
         --output outputs/smoke_eval_baseline.json
     _require_file "outputs/smoke_eval_baseline.json" "Baseline evaluation did not produce output"
-    _require_metric "outputs/smoke_eval_baseline.json" "tool_selection_accuracy" "baseline"
+    _require_metric "outputs/smoke_eval_baseline.json" "schema_compliance" "baseline"
+    _require_metric "outputs/smoke_eval_baseline.json" "multi_step_success" "baseline"
     echo ">>> Baseline results:"
     python3 -m json.tool outputs/smoke_eval_baseline.json
 fi
@@ -214,7 +215,8 @@ if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
         --benchmarks $SMOKE_BENCHMARKS \
         --output outputs/smoke_eval_sft.json
     _require_file "outputs/smoke_eval_sft.json" "SFT evaluation did not produce output"
-    _require_metric "outputs/smoke_eval_sft.json" "tool_selection_accuracy" "sft"
+    _require_metric "outputs/smoke_eval_sft.json" "schema_compliance" "sft"
+    _require_metric "outputs/smoke_eval_sft.json" "multi_step_success" "sft"
     echo ">>> SFT results:"
     python3 -m json.tool outputs/smoke_eval_sft.json
 fi
@@ -264,7 +266,8 @@ if [[ "$STAGE" == "grpo" || "$STAGE" == "all" ]]; then
         --benchmarks $SMOKE_BENCHMARKS \
         --output outputs/smoke_eval_grpo.json
     _require_file "outputs/smoke_eval_grpo.json" "GRPO evaluation did not produce output"
-    _require_metric "outputs/smoke_eval_grpo.json" "tool_selection_accuracy" "grpo"
+    _require_metric "outputs/smoke_eval_grpo.json" "schema_compliance" "grpo"
+    _require_metric "outputs/smoke_eval_grpo.json" "multi_step_success" "grpo"
     echo ">>> GRPO results:"
     python3 -m json.tool outputs/smoke_eval_grpo.json
 fi

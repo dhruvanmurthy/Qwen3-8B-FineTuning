@@ -1,223 +1,114 @@
-# Step-by-Step Execution Plan
+# Execution Plan
 
-Complete guide to execute the Qwen3-8B fine-tuning project from start to finish.
+This is the current operational checklist for the repository.
 
-Pipeline: **Baseline Eval → SFT Training → GRPO Training → Final Comparison**
+## Phase 1: Environment Setup
 
-## Phase 1: Local Setup (1 hour)
-
-### Step 1.1: Create Virtual Environment
-```bash
-# PowerShell on Windows
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-
-# Or conda
-conda create -n qwen3-finetune python=3.11
-conda activate qwen3-finetune
-```
-
-### Step 1.2: Install Dependencies
 ```bash
 pip install -r requirements.txt
-```
-
-### Step 1.3: Configure Environment Variables
-```bash
-# Copy template
 cp .env.example .env
-
-# Edit .env with your credentials:
-#   WANDB_API_KEY=<your_key>
 ```
 
-### Step 1.4: Verify Installation
-```bash
-python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
-python -c "from transformers import AutoTokenizer; print('Transformers OK')"
-python -c "import tinker; print('Tinker OK')"
-python -c "from src.rewards import tool_name_reward; print('Project modules OK')"
-```
+Required for real remote work:
 
-## Phase 2: W&B Setup (10 min)
+- `TINKER_API_KEY`
 
-### Step 2.1: Create W&B Project
-```bash
-wandb login
-# Project: qwen3-8b-tool-use at wandb.ai/dhruvanmurthy/qwen3-8b-tool-use
-```
+Optional but recommended:
 
-## Phase 3: Data Preparation (1-2 hours)
+- `WANDB_API_KEY`
+- `HF_TOKEN`
+- `HF_REPO_ID`
 
-### Step 3.1: Download & Process Datasets
+## Phase 2: Dataset Preparation
+
 ```bash
 bash scripts/prepare_datasets.sh
 ```
 
-### Step 3.2: Verify Dataset
+Verify:
+
 ```bash
 python -c "
 from datasets import load_from_disk
 ds = load_from_disk('data/processed')
-print(f'Train samples: {len(ds[\"train\"])}')
-print(f'Validation samples: {len(ds[\"validation\"])}')
-print(f'Test samples: {len(ds[\"test\"])}')
-print(f'Columns: {ds[\"train\"].column_names}')
+print(len(ds['train']), len(ds['validation']), len(ds['test']))
+print(ds['train'].column_names)
 "
 ```
 
-Expected: ~3,043 train / ~380 val / ~381 test, columns: `input_ids`, `attention_mask`, `labels`.
+The exact split sizes depend on the generated data, but the default flow should
+produce an approximately 80/10/10 split with tokenized
+`input_ids/attention_mask/labels` columns.
 
-## Phase 4: Baseline Evaluation (15-30 min)
-
-Evaluate the unmodified base model to establish a performance floor.
-Requires `TINKER_API_KEY` — inference runs on Tinker’s remote GPUs.
+## Phase 3: Baseline Evaluation
 
 ```bash
 bash scripts/run_pipeline.sh baseline
-# or:
-python src/evaluate.py \
-  --base-model Qwen/Qwen3-8B \
-  --mode baseline \
-  --output outputs/eval_baseline.json
 ```
 
-### Verify
-```bash
-python -m json.tool outputs/eval_baseline.json
-# Expect tool_selection ~65%, argument_accuracy ~50%, multi_step ~40%
-```
+This evaluates the base model with the current structured benchmarks from
+`src/evaluate.py`.
 
-## Phase 5: SFT Training
+## Phase 4: SFT
 
-Supervised fine-tuning with LoRA (rank 64, LR 2e-4, 3 epochs).
-Training runs on Tinker’s remote GPUs — no local GPU required.
-
-### Local smoke test first (~2 min, no Tinker cost)
-```bash
-python src/train.py \
-  --base-model sshleifer/tiny-gpt2 \
-  --output-dir outputs/sft_smoke \
-  --dry-run --dry-run-steps 3
-```
-
-### Full SFT run
 ```bash
 bash scripts/run_pipeline.sh sft
-# or:
-bash scripts/run_local_training.sh
 ```
 
-### Evaluate SFT
-```bash
-python src/evaluate.py \
-  --base-model Qwen/Qwen3-8B \
-  --mode sft \
-  --sft-output-dir outputs/sft \
-  --output outputs/eval_sft.json
-```
+Artifacts:
 
-Expected: tool_selection ~85%, argument_accuracy ~75%, multi_step ~70%.
+- `outputs/sft/checkpoints.jsonl`
+- checkpoint directories and sampler metadata under `outputs/sft/`
 
-## Phase 6: GRPO Training
+## Phase 5: GRPO
 
-Reinforcement learning with binary verifiable rewards (rank 32, LR 4e-5, 50 steps).
-Training runs on Tinker’s remote GPUs.
-
-### Prerequisites
-- SFT checkpoint must exist at `outputs/sft/` (with `checkpoints.jsonl`)
-- SFT eval should show tool_selection > 60% (otherwise GRPO rewards will be all zero)
-
-### Run GRPO
 ```bash
 bash scripts/run_pipeline.sh grpo
-# or:
-python src/train_grpo.py \
-  --base-model Qwen/Qwen3-8B \
-  --sft-checkpoint outputs/sft \
-  --output-dir outputs/grpo
 ```
 
-### Monitor in W&B
-Check `reward/mean` — it should climb above 0.3 within the first 20 steps.
-If all rewards stay at 0 after 10 steps, see [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+Artifacts:
 
-### Evaluate GRPO
-```bash
-python src/evaluate.py \
-  --base-model Qwen/Qwen3-8B \
-  --mode grpo \
-  --sft-output-dir outputs/sft \
-  --grpo-output-dir outputs/grpo \
-  --output outputs/eval_grpo.json
-```
+- `outputs/grpo/checkpoints.jsonl`
+- checkpoint directories and sampler metadata under `outputs/grpo/`
 
-Expected: tool_selection >90%, argument_accuracy >85%, multi_step >80%.
+Note: the canonical pipeline uses the same LoRA rank for SFT and GRPO when GRPO
+starts from the SFT checkpoint.
 
-## Phase 7: Final Comparison (30 min)
-
-Generate a side-by-side comparison table of all three stages.
+## Phase 6: Comparison
 
 ```bash
 bash scripts/run_pipeline.sh compare
-# or:
-python src/evaluate.py \
-  --base-model Qwen/Qwen3-8B \
-  --mode compare \
-  --sft-output-dir outputs/sft \
-  --grpo-output-dir outputs/grpo \
-  --output outputs/eval_compare.json
 ```
 
-Output: markdown table showing Baseline vs SFT vs GRPO across all metrics.
+This creates a side-by-side comparison from the current baseline, SFT, and GRPO
+checkpoints.
 
-## Phase 8: Publish to Hugging Face Hub
+## One-Command Paths
 
-### Push trained adapters
-```bash
-# SFT adapter
-huggingface-cli upload dhruvanmurthy/qwen3-8b-tool-use-sft-lora outputs/sft/
-# GRPO adapter
-huggingface-cli upload dhruvanmurthy/qwen3-8b-tool-use-grpo-lora outputs/grpo/
-```
-
-### Push synthetic dataset
-```bash
-python scripts/push_dataset_to_hub.py \
-  --data-dir data/raw/synthetic \
-  --repo-id dhruvanmurthy/qwen3-8b-synthetic-tool-use
-```
-
-## One-Command Full Pipeline
-
-To run everything end-to-end:
+### Full remote pipeline
 
 ```bash
 bash scripts/run_pipeline.sh all
 ```
 
-This runs: baseline eval → SFT train → SFT eval → GRPO train → GRPO eval → comparison.
+### Local validation path
 
-## Checklist
+```bash
+LOCAL_VALIDATE=true bash scripts/run_pipeline.sh all
+```
 
-- [ ] Environment setup and dependencies verified
-- [ ] Datasets downloaded and processed (~3,043 train samples)
-- [ ] Baseline evaluation complete
-- [ ] SFT training complete (loss < 1.0)
-- [ ] SFT evaluation shows improvement over baseline
-- [ ] GRPO training complete (reward/mean > 0.3)
-- [ ] GRPO evaluation shows improvement over SFT
-- [ ] Comparison table generated
-- [ ] Models pushed to HF Hub
-- [ ] Total training time within expectations
+### Real smoke test
 
----
+```bash
+bash scripts/run_smoke_test.sh
+```
 
-**Good luck!**
+## Completion Checklist
 
-Start with Phase 1 and proceed chronologically. Each phase builds on previous.
-
-For questions, see:
-- TROUBLESHOOTING.md (for errors)
-- docs/TRAINING_PLAN.md (for training details)
-- README.md (for overview)
+- Environment created and dependencies installed
+- `.env` configured
+- `scripts/prepare_datasets.sh` completed successfully
+- Baseline evaluation produced `outputs/eval_baseline.json`
+- SFT produced `outputs/sft/checkpoints.jsonl`
+- GRPO produced `outputs/grpo/checkpoints.jsonl`
+- Comparison produced `outputs/eval_comparison.json`

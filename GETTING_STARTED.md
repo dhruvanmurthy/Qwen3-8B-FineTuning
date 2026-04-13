@@ -1,30 +1,22 @@
-# Getting Started — Local Setup & Verification
+# Getting Started
 
-Step-by-step guide to run and verify the full **Baseline → SFT → GRPO** pipeline on your local machine.
-
----
+This guide walks through the current local workflow for the Tinker-based
+pipeline.
 
 ## Prerequisites
 
-| Requirement | Minimum | Recommended |
-|---|---|---|
-| **Tinker API Key** | Required | Required |
-| **RAM** | 16 GB | 32 GB |
-| **Disk** | 50 GB free | 100 GB free |
-| **Python** | 3.10 | 3.11 |
-| **OS** | Windows 10 / Linux | Linux (Ubuntu 22.04) |
+- Python 3.10 or 3.11
+- Bash for the shell scripts
+  - On Windows, use WSL for `scripts/*.sh`
+- 30 GB or more of free disk space
+- `TINKER_API_KEY` for real training and evaluation
 
-> **Note**: No local GPU is required. Training and inference run on Tinker’s remote GPUs.
-> A local GPU is only needed if you want to run local inference after training.
+No local GPU is required for the main pipeline. Training and inference run on
+Tinker.
 
-## Step 1 — Clone & Create Environment
+## 1. Create an Environment
 
-```bash
-git clone https://github.com/dhruvanmurthy/Qwen3-8B-FineTuning.git
-cd Qwen3-8B-FineTuning
-```
-
-### Windows (PowerShell)
+### PowerShell
 
 ```powershell
 python -m venv .venv
@@ -32,7 +24,7 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### Linux / WSL
+### Bash or WSL
 
 ```bash
 python -m venv .venv
@@ -40,412 +32,197 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Step 2 — Configure Credentials
+## 2. Configure `.env`
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env`:
+Fill in the keys you want to use:
+
 ```dotenv
-HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxxxx
+HF_TOKEN=hf_xxx
 HF_USER=your_hf_username
 HF_REPO_ID=qwen3-8b-tool-use-lora
-WANDB_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxx
+WANDB_API_KEY=xxx
+WANDB_ENTITY=your_wandb_entity
 WANDB_PROJECT=qwen3-8b-tool-use
-TINKER_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxx
+TINKER_API_KEY=xxx
 ```
 
-Login to services:
-```bash
-huggingface-cli login   # optional — HF_TOKEN in .env is sufficient
-wandb login
-```
-
-## Step 3 — Verify Installation
-
-Run each check. All should print OK / True:
+## 3. Verify the Environment
 
 ```bash
-# 1. CUDA available (optional — local GPU not required for training)
-python -c "import torch; print('CUDA:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A')"
-
-# 2. Core packages
-python -c "import transformers, datasets, tinker; print('All imports OK')"
-
-# 3. Project modules
-python -c "import sys; sys.path.insert(0,'src'); from data_loader import ToolUseDataLoader; from rewards import tool_name_reward; print('Project modules OK')"
-
-# 4. Model access (downloads tokenizer, ~1 min)
-python -c "from transformers import AutoTokenizer; t = AutoTokenizer.from_pretrained('Qwen/Qwen3-8B'); print(f'Vocab size: {t.vocab_size}')"
+python -c "import transformers, datasets, tinker, wandb; print('Core imports OK')"
+python -c "import sys; sys.path.insert(0, 'src'); from data_loader import ToolUseDataLoader; from rewards import compute_rewards; print('Project imports OK')"
 ```
 
-**Expected output** (all must pass):
-```
-CUDA: True  (or False — local GPU is optional)
-All imports OK
-Project modules OK
-Vocab size: 151936
-```
-
-## Step 4 — Prepare Datasets
+## 4. Prepare Datasets
 
 ```bash
 bash scripts/prepare_datasets.sh
 ```
 
-### Verify
+What this does:
+
+- generates synthetic data into `data/raw/synthetic/`
+- loads the configured local source from `configs/dataset_config.yaml`
+- applies preprocessing and balancing
+- saves a raw structured test split to `data/processed/test_raw.jsonl`
+- saves tokenized train/validation/test splits to `data/processed/`
+
+Verify the result:
 
 ```bash
 python -c "
 from datasets import load_from_disk
 ds = load_from_disk('data/processed')
-print(f'Train:      {len(ds[\"train\"]):,} examples')
-print(f'Validation: {len(ds[\"validation\"]):,} examples')
-print(f'Test:       {len(ds[\"test\"]):,} examples')
-print(f'Columns:    {ds[\"train\"].column_names}')
+print('Train:', len(ds['train']))
+print('Validation:', len(ds['validation']))
+print('Test:', len(ds['test']))
+print('Columns:', ds['train'].column_names)
 "
 ```
 
-**Expected**: ~9,824 train / ~1,228 val / ~1,228 test, columns include `input_ids`, `attention_mask`, `labels`.
+Expected shape:
 
-## Step 5 — Stage 0: Baseline Evaluation
+- The exact counts vary because generation, deduplication, and balancing are
+  data dependent.
+- With the default pipeline, expect roughly twelve thousand processed examples
+  before splitting and about an 80/10/10 train/validation/test split.
+- Tokenized splits should contain `input_ids`, `attention_mask`, and `labels`.
 
-Evaluate the base Qwen3-8B model **before any training** to establish the baseline.
-Inference runs on Tinker’s remote GPUs (requires `TINKER_API_KEY`).
+## 5. Run Baseline Evaluation
 
 ```bash
 python src/evaluate.py \
-    --mode baseline \
-    --base-model Qwen/Qwen3-8B \
-    --output outputs/eval_baseline.json
+  --mode baseline \
+  --base-model Qwen/Qwen3-8B \
+  --output outputs/eval_baseline.json
 ```
 
-### Verify
+## 6. Run SFT
 
-```bash
-python -m json.tool outputs/eval_baseline.json
-```
-
-**Expected**: Tool selection accuracy ~40-60%, argument accuracy ~20-30%, multi-step ~15-25%. This is the number to beat.
-
-## Step 6 — Stage 1: SFT Training
-
-Training runs on Tinker’s remote GPUs. No local GPU required.
-
-### Quick smoke test (dry-run, no Tinker cost)
+### Dry-run validation
 
 ```bash
 python src/train.py \
-    --base-model sshleifer/tiny-gpt2 \
-    --output-dir ./outputs/sft_test \
-    --dry-run --dry-run-steps 3
+  --base-model sshleifer/tiny-gpt2 \
+  --output-dir outputs/sft_dry_run \
+  --dry-run \
+  --dry-run-steps 3
 ```
 
-### Verify smoke test
-
-```bash
-python -c "
-import os, json
-path = 'outputs/sft_test'
-files = os.listdir(path)
-assert 'dry_run_summary.json' in files, 'Missing dry_run_summary.json'
-print('SFT smoke test: PASSED')
-print('Files:', files)
-"
-```
-
-### Full SFT training
+### Full SFT run
 
 ```bash
 bash scripts/run_local_training.sh
-# Or configure directly:
+```
+
+Or call the training script directly:
+
+```bash
 python src/train.py \
-    --base-model Qwen/Qwen3-8B \
-    --output-dir ./outputs/sft \
-    --lora-rank 64 \
-    --learning-rate 2e-4 \
-    --batch-size 8 \
-    --num-epochs 3 \
-    --max-seq-length 2048
+  --base-model Qwen/Qwen3-8B \
+  --synthetic-data-dir ./data/raw/synthetic \
+  --output-dir ./outputs/sft \
+  --lora-rank 64 \
+  --learning-rate 2e-4 \
+  --batch-size 8 \
+  --num-epochs 3 \
+  --max-seq-length 2048
 ```
 
-### SFT evaluation
+## 7. Run GRPO
 
-```bash
-python src/evaluate.py \
-    --mode sft \
-    --base-model Qwen/Qwen3-8B \
-    --sft-output-dir ./outputs/sft \
-    --output outputs/eval_sft.json
-```
-
-### Verify
-
-```bash
-python -m json.tool outputs/eval_sft.json
-```
-
-**Expected**: Tool selection 70-85%, argument accuracy 55-70%, multi-step 50-65% — a clear jump from baseline.
-
-## Step 7 — Stage 2: GRPO Training
-
-This stage applies Group Relative Policy Optimization on top of the SFT checkpoint, using binary verifiable rewards. Training runs on Tinker’s remote GPUs.
-
-### Quick smoke test (dry-run, no Tinker cost)
+### Dry-run validation
 
 ```bash
 python src/train_grpo.py \
-    --base-model sshleifer/tiny-gpt2 \
-    --sft-checkpoint ./outputs/sft \
-    --output-dir ./outputs/grpo_test \
-    --dry-run --dry-run-steps 3
+  --base-model sshleifer/tiny-gpt2 \
+  --sft-checkpoint ./outputs/sft \
+  --output-dir ./outputs/grpo_dry_run \
+  --dry-run \
+  --dry-run-steps 3
 ```
 
-### Verify smoke test
+### Full GRPO run
+
+Use the pipeline script if you want the canonical defaults:
 
 ```bash
-python -c "
-import os
-path = 'outputs/grpo_test'
-files = os.listdir(path)
-assert 'dry_run_summary.json' in files, 'Missing dry_run_summary.json'
-print('GRPO smoke test: PASSED')
-print('Files:', files)
-"
+bash scripts/run_pipeline.sh grpo
 ```
 
-### Full GRPO training
+Or call the training script directly:
 
 ```bash
 python src/train_grpo.py \
-    --base-model Qwen/Qwen3-8B \
-    --sft-checkpoint ./outputs/sft \
-    --output-dir ./outputs/grpo \
-    --lora-rank 32 \
-    --learning-rate 4e-5 \
-    --max-steps 50 \
-    --batch-size 16 \
-    --group-size 8
+  --base-model Qwen/Qwen3-8B \
+  --sft-checkpoint ./outputs/sft \
+  --output-dir ./outputs/grpo \
+  --lora-rank 64 \
+  --learning-rate 4e-5 \
+  --batch-size 16 \
+  --group-size 8 \
+  --max-steps 50
 ```
 
-### GRPO evaluation
+If you start GRPO from an SFT checkpoint, keep the LoRA rank aligned with the
+SFT run. `scripts/run_pipeline.sh` enforces that by default.
+
+## 8. Compare Stages
 
 ```bash
 python src/evaluate.py \
-    --mode grpo \
-    --base-model Qwen/Qwen3-8B \
-    --sft-output-dir ./outputs/sft \
-    --grpo-output-dir ./outputs/grpo \
-    --output outputs/eval_grpo.json
+  --mode compare \
+  --base-model Qwen/Qwen3-8B \
+  --sft-output-dir ./outputs/sft \
+  --grpo-output-dir ./outputs/grpo \
+  --output outputs/eval_comparison.json
 ```
 
-## Step 8 — Full Three-Stage Comparison
+Or run all stages through the canonical orchestrator:
 
 ```bash
-python src/evaluate.py \
-    --mode all \
-    --base-model Qwen/Qwen3-8B \
-    --sft-output-dir ./outputs/sft \
-    --grpo-output-dir ./outputs/grpo \
-    --output outputs/eval_comparison.json
+bash scripts/run_pipeline.sh all
 ```
 
-This prints a markdown table:
-
-```
-======================================================================
-STAGE COMPARISON
-======================================================================
-| Metric                            | baseline | sft   | grpo  |
-|---|---|---|---|
-| tool_selection_accuracy_synthetic | 42.1%    | 72.3% | 88.7% |
-| argument_accuracy                 | 25.3%    | 62.1% | 84.5% |
-| schema_compliance                 | 31.0%    | 85.2% | 96.1% |
-| multi_step_success                | 18.7%    | 58.4% | 80.3% |
-| avg_latency_ms                    | 245.00   | 251.00| 253.00|
-======================================================================
-```
-
-## Step 9 — Push to Hugging Face Hub
-
-### Push trained adapters
-```bash
-# Automatically pushed during training when HF_TOKEN + HF_REPO_ID are set.
-# To push manually:
-huggingface-cli upload dhruvanmurthy/qwen3-8b-tool-use-sft-lora outputs/sft/
-huggingface-cli upload dhruvanmurthy/qwen3-8b-tool-use-grpo-lora outputs/grpo/
-```
-
-### Push synthetic dataset
-```bash
-python scripts/push_dataset_to_hub.py \
-  --repo-id dhruvanmurthy/qwen3-8b-synthetic-tool-use \
-  --data-dir data/raw/synthetic
-```
-
----
-
-## One-Command Pipeline
-
-To run everything end-to-end (baseline → SFT → GRPO → comparison):
+## 9. Use the Smoke Test
 
 ```bash
-bash scripts/run_pipeline.sh
+bash scripts/run_smoke_test.sh
 ```
 
-Or run individual stages:
+The smoke test:
+
+- generates a small synthetic dataset
+- runs reduced SFT and GRPO jobs
+- evaluates a small benchmark subset
+- writes smoke outputs under `outputs/smoke_*`
+
+## 10. Optional Hub Uploads
+
+Automatic upload behavior:
+
+- `src/train.py` uploads the SFT adapter when `HF_TOKEN` and `HF_REPO_ID` are set
+- `src/train_grpo.py` uploads the GRPO adapter when `HF_TOKEN` and `HF_REPO_ID` are set
+
+Manual helpers:
 
 ```bash
-bash scripts/run_pipeline.sh baseline   # Stage 0 only
-bash scripts/run_pipeline.sh sft        # Stage 1 only
-bash scripts/run_pipeline.sh grpo       # Stage 2 only
-bash scripts/run_pipeline.sh compare    # Comparison only
+python scripts/push_dataset_to_hub.py --repo-id your-user/qwen3-8b-synthetic-tool-use
+python scripts/push_model_to_hub.py --repo-id your-user/qwen3-8b-tool-use-grpo
 ```
 
----
+## Recommended First Run
 
-## Troubleshooting Quick Reference
+If this is your first pass through the repo:
 
-| Symptom | Fix |
-|---|---|
-| `CUDA out of memory` | Not applicable for Tinker training — GPU runs remotely |
-| GRPO OOM on generations | Reduce `--group-size 4` and `--max-completion-length 256` |
-| Loss is NaN | Reduce `--learning-rate` by 2× |
-| SFT checkpoint not found at GRPO stage | Ensure `--sft-checkpoint ./outputs/sft` points to correct dir |
-| W&B not logging | Run `wandb login` and set `--report-to wandb` |
-| Tokenizer load error | Ensure `transformers` is up to date and model name is correct |
-| Tinker connection error | Verify `TINKER_API_KEY` is set and valid |
-
-See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for the full guide.
-
----
-**Last Updated**: March 2026
-
-Before submitting to production:
-
-- [ ] Run evaluation suite (src/evaluate.py)
-- [ ] Check tool selection > 90%
-- [ ] Verify argument accuracy > 85%
-- [ ] Test error handling (graceful fallback)
-- [ ] Profile latency (< 500ms/token)
-- [ ] Review W&B training curves
-- [ ] Confirm loss decreased monotonically
-- [ ] Check no overfitting (train/val gap < 0.3)
-- [ ] Validate model saves locally to outputs/
-- [ ] Test inference code on fresh model
-- [ ] Push adapters + dataset to HF Hub
-- [ ] Document any issues in TROUBLESHOOTING.md
-
-## Success Indicators
-
-### 🟢 Project Successful if:
-1. ✅ Train → Val loss monotonically decreases
-2. ✅ Final eval_loss < 1.5
-3. ✅ Tool selection accuracy > 85%
-4. ✅ Training time within expectations
-5. ✅ Model pushed to HF Hub
-6. ✅ All runs logged to W&B
-7. ✅ Documentation complete
-
-### 🟡 Project Acceptable if:
-- 4-5 of above checkmarks
-- Cost $100-150
-
-### 🔴 Project Needs Work if:
-- < 5 checkmarks
-- eval_loss > 2.0
-- Accuracy < 75%
-
-## Collaboration & Sharing
-
-### Share Your Results
-```markdown
-**Qwen3-8B Fine-tuning Results** ✨
-
-Tool Selection: 92% accuracy
-Training Cost: $40
-Time: 20 hours
-Model: https://huggingface.co/dhruvanmurthy/qwen3-8b-tool-use-grpo-lora
-Dataset: https://huggingface.co/datasets/dhruvanmurthy/qwen3-8b-synthetic-tool-use
-
-Setup guide: https://github.com/dhruvanmurthy/Qwen3-8B-FineTuning
+```bash
+bash scripts/prepare_datasets.sh
+LOCAL_VALIDATE=true bash scripts/run_pipeline.sh all
 ```
 
-### Contribute Improvements
-See CONTRIBUTING.md for:
-- New datasets
-- Evaluation metrics
-- Multi-GPU distributed training
-- Cost optimizations
-- Documentation
-
-### Get Help
-- **Errors**: Check TROUBLESHOOTING.md
-- **Questions**: GitHub Discussions
-- **Bugs**: GitHub Issues
-
-## Cost Breakdown
-
-```
-┌──────────────────────────────────────────────┐
-│ TRAINING TIME SUMMARY                        │
-├──────────────────────────────────────────────┤
-│ SFT Training (3 epochs)      ~18h (1× GPU)   │
-│ GRPO Training (50 steps)     ~4h  (1× GPU)   │
-│ Evaluation & misc            ~2h             │
-│                                              │
-│ TOTAL (1× GPU) :  ~24h                       │
-│ TOTAL (4× GPU) :  ~7h                        │
-└──────────────────────────────────────────────┘
-```
-
-Great for:
-- 2-3 more full training runs
-- Hyperparameter experiments
-- Different datasets
-- Infrastructure testing
-
-## Resources by Role
-
-### 👨‍💻 For ML Engineers
-- Start: TRAINING_PLAN.md
-- Then: src/train.py & src/data_loader.py
-- Customize: configs/training.yaml
-
-### ☁️ For DevOps/Cloud Engineers
-- Start: scripts/run_pipeline.sh
-- Monitor: W&B dashboards
-
-### 📊 For Data Scientists
-- Start: DATASET_STRATEGY.md
-- Then: src/data_loader.py
-- Experiment: Add new datasets in configs/
-
-### 📝 For Documentation
-- Start: README.md
-- Expand: Each docs/*.md file
-- Contribute: CONTRIBUTING.md improvements
-
-## Final Words
-
-This is a **complete, production-ready project** scaffold. All pieces (code, docs, configs, infrastructure) work together seamlessly.
-
-**You are literally 1 Python command away from training a fine-tuned LLM.**
-
-The path forward is clear:
-1. ✅ Run local test (Verify setup works)
-2. ✅ Prepare data (Assemble training data)
-3. ✅ Train (Start training job — single or multi-GPU)
-4. ✅ Evaluate & publish (Test & release)
-
-**Estimated total effort**: 30-40 hours of elapsed time, 5-10 hours of active work
-
-Good luck! 🚀
-
----
-
-**Project Lead**: Dhruva N
-**GitHub**: https://github.com/dhruvanmurthy/Qwen3-8B-FineTuning
-**HuggingFace**: https://huggingface.co/dhruvanmurthy
-**Last Updated**: March 2026
+That confirms the local wiring before you spend time or money on a full remote
+run.

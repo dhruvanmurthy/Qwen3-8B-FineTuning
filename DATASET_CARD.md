@@ -226,7 +226,7 @@ from datasets import load_from_disk
 
 ds = load_from_disk("data/processed")
 print(ds["train"].column_names)  # ['input_ids', 'attention_mask', 'labels']
-print(len(ds["train"]))          # ~3,043
+print(len(ds["train"]))          # Approximate; depends on generation, dedup, and balancing
 ```
 
 ### Regenerate from Scratch

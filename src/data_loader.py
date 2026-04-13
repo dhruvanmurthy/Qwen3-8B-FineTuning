@@ -5,15 +5,12 @@ Handles dataset loading, tokenization, and formatting.
 
 import json
 import logging
-import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import yaml
 from datasets import Dataset, DatasetDict, concatenate_datasets
-
-from constants import TOOL_USE_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -402,101 +399,6 @@ class ToolUseDataLoader:
         result = concatenate_datasets(balanced)
         logger.info(f"Balanced to ~{target_count} per source, total: {len(result)}")
         return result
-
-    # ------------------------------------------------------------------
-    # GRPO prompt preparation
-    # ------------------------------------------------------------------
-
-    def prepare_grpo_prompts(self, tokenizer, system_prompt: str = None) -> Dataset:
-        """Prepare a prompt-only dataset for GRPO training.
-
-        Returns a Dataset with columns:
-          prompt, expected_tool, expected_args, expected_chain, source
-        """
-        dataset = self.load_all_datasets()
-        dataset = self.preprocess(dataset)
-
-        if self.config.get("balance_sources", True):
-            dataset = self._balance_sources(dataset)
-
-        if system_prompt is None:
-            system_prompt = TOOL_USE_SYSTEM_PROMPT
-
-        chat_template_available = (
-            hasattr(tokenizer, "apply_chat_template")
-            and tokenizer.chat_template is not None
-        )
-
-        def _format_example(example):
-            prompt_text = (
-                example.get("instruction")
-                or example.get("user_instruction")
-                or example.get("query")
-                or example.get("text", "")
-            )
-
-            # --- expected tool ---
-            expected_tool = example.get("expected_tool", "")
-            if not expected_tool:
-                for key in ("expected_calls", "api_calls"):
-                    calls = example.get(key)
-                    if isinstance(calls, list) and calls:
-                        first = calls[0]
-                        expected_tool = (
-                            first.get("tool")
-                            or first.get("name", "")
-                        )
-                        break
-
-            # --- expected args ---
-            expected_args = ""
-            for key in ("expected_calls", "api_calls"):
-                calls = example.get(key)
-                if isinstance(calls, list) and calls:
-                    args = calls[0].get("arguments", calls[0].get("parameters", {}))
-                    expected_args = json.dumps(args) if isinstance(args, dict) else str(args)
-                    break
-
-            # --- expected chain ---
-            expected_chain = "[]"
-            calls = example.get("api_calls")
-            if isinstance(calls, list) and len(calls) > 1:
-                chain = [
-                    c.get("tool") or c.get("name", "") for c in calls
-                ]
-                expected_chain = json.dumps(chain)
-
-            # --- formatted prompt ---
-            if chat_template_available:
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt_text},
-                ]
-                prompt = tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
-                )
-            else:
-                prompt = (
-                    f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
-                    f"<|im_start|>user\n{prompt_text}<|im_end|>\n"
-                    f"<|im_start|>assistant\n"
-                )
-
-            return {
-                "prompt": prompt,
-                "expected_tool": expected_tool,
-                "expected_args": expected_args,
-                "expected_chain": expected_chain,
-            }
-
-        dataset = dataset.map(_format_example, desc="Formatting GRPO prompts")
-        keep = {"prompt", "expected_tool", "expected_args", "expected_chain", "source"}
-        drop = [c for c in dataset.column_names if c not in keep]
-        if drop:
-            dataset = dataset.remove_columns(drop)
-
-        logger.info("GRPO prompt dataset: %d examples", len(dataset))
-        return dataset
 
 
 def create_data_loader(config_path: str = "configs/dataset_config.yaml") -> ToolUseDataLoader:

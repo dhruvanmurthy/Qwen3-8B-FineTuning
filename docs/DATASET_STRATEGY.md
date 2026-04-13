@@ -1,299 +1,118 @@
-# Dataset Strategy & Pipeline
+# Dataset Strategy
 
-Complete guide to generating, preprocessing, and versioning synthetic datasets for tool-use fine-tuning.
+The active data pipeline in this repository is fully synthetic and local-first.
 
-## Dataset Overview
+## Canonical Flow
 
-**Total Generated**: ~40,000 raw JSONL examples ? ~12,280 after dedup ? ~9,824 training
-**Strategy**: 100% synthetically generated via `scripts/generate_synthetic.py`
-**Format**: Unified `text` column + structured `tool_calls` field
-**Time to Prepare**: ~2–5 minutes (automated via `prepare_datasets.sh`)
+The current dataset path is:
 
-## Source Datasets
+1. generate synthetic examples with `scripts/generate_synthetic.py`
+2. load them through `ToolUseDataLoader`
+3. preprocess and balance the examples
+4. split them into train/validation/test
+5. save:
+   - tokenized splits under `data/processed/`
+   - structured evaluation rows under `data/processed/test_raw.jsonl`
 
-### Synthetic Data (15,000 sampled for training)
-
-**Source**: `scripts/generate_synthetic.py` with template-based generation (seed=42)
-**Rationale**: Full control over tool coverage, argument diversity, and schema compliance
-
-**Categories** (12 single-step + 6 multi-step generators):
-- Weather lookup, stock prices, currency conversion
-- Translation, unit conversion, math operations
-- Reminders, music search, email composition
-- Multi-step: translate+weather, stock+convert, weather+remind, etc.
-
-**Generation**:
-```bash
-python scripts/generate_synthetic.py --num-samples 40000 --seed 42
-```
-
-**Output**:
-- `data/raw/synthetic/synthetic_single.jsonl` (~34,700 examples)
-- `data/raw/synthetic/synthetic_multistep.jsonl` (~5,300 examples)
-- 15,000 sampled during dataset loading for training
-
-**Quality Control**:
-- Schema validation (`instruction`, `tool_calls`, `text` fields required)
-- MD5 deduplication
-- Deterministic with seed for reproducibility
-
-## Data Format
-
-Every training example has the following schema:
-
-```json
-{
-  "instruction": "What is the weather in Tokyo?",
-  "tool_calls": [
-    {
-      "tool": "get_weather",
-      "arguments": {"city": "Tokyo"}
-    }
-  ],
-  "text": "<|im_start|>user\nWhat is the weather in Tokyo?<|im_end|>\n<|im_start|>assistant\n{\"tool\": \"get_weather\", \"arguments\": {\"city\": \"Tokyo\"}}<|im_end|>"
-}
-```
-
-Multi-step examples include a sequence in `tool_calls`:
-
-```json
-{
-  "instruction": "Translate 'hello' to Spanish and get the weather in Madrid.",
-  "tool_calls": [
-    {"tool": "translate_text", "arguments": {"text": "hello", "target_language": "Spanish"}},
-    {"tool": "get_weather", "arguments": {"city": "Madrid"}}
-  ],
-  "text": "..."
-}
-```
-
-## Preprocessing Pipeline
-
-### Step 1: Generate Synthetic Data
-
-```bash
-python scripts/generate_synthetic.py --num-samples 40000 --seed 42
-# Writes:
-#   data/raw/synthetic/synthetic_single.jsonl
-#   data/raw/synthetic/synthetic_multistep.jsonl
-```
-
-Or run the full prepare script which handles everything:
+The canonical shell entrypoint is:
 
 ```bash
 bash scripts/prepare_datasets.sh
 ```
 
-### Step 2: Clean & Normalize
+## Synthetic Generation
 
-`data_loader.py` handles cleaning automatically:
-
-- Remove duplicates (MD5 hash of full row)
-- Validate completeness (`instruction`, `tool_calls`, `text` fields required)
-- Normalize whitespace
-- Ensure `text` column is present (already the case for synthetic data)
-
-### Step 3: Split & Tokenize
-
-After normalization, the pipeline:
-1. **Splits** into train (80%) / validation (10%) / test (10%)
-2. **Tokenizes** to `max_length=2048`
-
-**Output**: HuggingFace Dataset (Arrow format) in `data/processed/`
-- `data/processed/train/` (~9,824 samples)
-- `data/processed/validation/` (~1,228 samples)
-- `data/processed/test/` (~1,228 samples)
-
-### Step 4: Upload to Hub (Optional)
+Generator script:
 
 ```bash
-# Upload raw JSONL files to HF dataset repo
-python scripts/push_dataset_to_hub.py \
-  --repo-id YOUR_HF_USER/qwen3-8b-tool-use-dataset
+python scripts/generate_synthetic.py --num-samples 40000 --output-dir data/raw/synthetic
 ```
 
-## Configuration
+By default, `scripts/prepare_datasets.sh` generates `40000` raw examples.
 
-`configs/dataset_config.yaml`:
+The generator writes:
 
-```yaml
-sources:
-  synthetic:
-    enabled: true
-    name: "Synthetic"
-    path: "./data/raw/synthetic/"
-    type: "local"
-    samples: 15000
-    weight: 1.0
+- `data/raw/synthetic/synthetic_single.jsonl`
+- `data/raw/synthetic/synthetic_multistep.jsonl`
 
-preprocessing:
-  max_seq_length: 2048
-  min_seq_length: 50
-  remove_duplicates: true
-  dedup_method: "md5"
-  remove_incomplete: true
+Each example contains structured fields such as:
 
-splits:
-  train: 0.8
-  validation: 0.1
-  test: 0.1
+- `instruction`
+- `tools`
+- `tool_calls`
+- `category`
+- `num_steps`
+- `text`
 
-seed: 42
-```
+## Loader Configuration
 
-## Deduplication & Quality
+`configs/dataset_config.yaml` is the live configuration file.
 
-### Deduplication
+Key defaults:
 
-```python
-import hashlib
-from collections import defaultdict
+- source path: `./data/raw/synthetic/`
+- source type: `local`
+- sample cap: `15000`
+- split ratios: `0.8 / 0.1 / 0.1`
+- source balancing: enabled
 
-seen = defaultdict(list)
-duplicates = []
+That means the raw generator can create more examples than the loader keeps for
+the current training run.
 
-for example in examples:
-    text = json.dumps(example["text"], sort_keys=True)
-    hash_val = hashlib.md5(text.encode()).hexdigest()
+## Preprocessing
 
-    if hash_val in seen:
-        duplicates.append(example["id"])
-    else:
-        seen[hash_val].append(example["id"])
+`ToolUseDataLoader` currently performs:
 
-print(f"Found {len(duplicates)} duplicates")
-```
+- duplicate removal
+- incomplete-example filtering
+- whitespace normalization
+- optional source balancing
+- train/validation/test splitting
+- tokenization for training outputs
 
-### Quality Metrics
+## Expected Sizes
 
-After preprocessing, compute:
+Exact sizes vary from run to run because of generation, deduplication, and
+balancing. With the default configuration:
 
-```python
-print(f"Total examples: {len(dataset)}")
-print(f"Avg tokens per example: {dataset.map(count_tokens)['token_count'].mean():.0f}")
-print(f"Max tokens: {dataset.map(count_tokens)['token_count'].max()}")
-print(f"Tool calls per example: {dataset.map(count_tools)['tools'].mean():.2f}")
-```
+- raw generation starts at `40000` examples
+- the loader samples up to `15000`
+- preprocessing often lands near the low tens of thousands
+- the final tokenized dataset is split approximately `80/10/10`
 
-### Expected Output
+Treat the split sizes as approximate rather than fixed constants.
 
-```
-Total generated:  ~40,000
-After dedup:      ~12,280
+## Why `test_raw.jsonl` Exists
 
-Source distribution:
-- synthetic (single-step): ~9,700 (79%)
-- synthetic (multi-step):  ~2,580 (21%)
+The evaluation pipeline needs more than token IDs. It needs:
 
-Final splits:
-- Train:      ~9,824 (80%)
-- Validation: ~1,228 (10%)
-- Test:       ~1,228 (10%)
-```
+- prompt text
+- expected tool calls
+- tool metadata
+- source labels
 
-## Accessing in Training
+`scripts/prepare_datasets.sh` therefore saves a raw structured test split to
+`data/processed/test_raw.jsonl` before text normalization and tokenization.
 
-```python
+This file is the preferred evaluation source for `src/evaluate.py`.
+
+## Inspecting the Prepared Dataset
+
+```bash
+python -c "
 from datasets import load_from_disk
-
-ds = load_from_disk("data/processed")
-train = ds["train"]
-print(len(train), train.column_names)
-# ~9824, ['input_ids', 'attention_mask', 'labels']
+ds = load_from_disk('data/processed')
+print(ds)
+print(ds['train'].column_names)
+"
 ```
 
-## GRPO Prompt Preparation
+## Optional Upload
 
-The GRPO stage uses a prompt-only dataset where each row contains:
-
-| Field | Description |
-|-------|-------------|
-| `prompt` | The user query formatted via `apply_chat_template` (system + user turn only) |
-| `expected_tool` | Ground-truth tool name for reward scoring |
-| `expected_args` | Ground-truth arguments dict |
-| `expected_chain` | Full expected call sequence (for `full_chain_reward`) |
-
-This is handled automatically by `ToolUseDataLoader.prepare_grpo_prompts()`:
-
-```python
-from src.data_loader import ToolUseDataLoader
-
-loader = ToolUseDataLoader("configs/dataset_config.yaml")
-grpo_dataset = loader.prepare_grpo_prompts(tokenizer)
-```
-
-## Common Issues & Fixes
-
-### Issue: Memory Error During Tokenization
-
-```
-MemoryError: Unable to allocate 128 GB for an array
-```
-
-**Fix**: Tokenize in batches:
-```python
-dataset.map(tokenize_fn, batched=True, batch_size=1000)
-```
-
-### Issue: Duplicate Examples
-
-```python
-# Check for near-duplicates (not exact)
-from difflib import SequenceMatcher
-
-duplicates = []
-for i, ex1 in enumerate(dataset):
-    for j, ex2 in enumerate(dataset[i+1:], i+1):
-        similarity = SequenceMatcher(None,
-            str(ex1["text"]),
-            str(ex2["text"])
-        ).ratio()
-        if similarity > 0.95:
-            duplicates.append((i, j, similarity))
-```
-
-### Issue: Imbalanced Tool Distribution
-
-Some tools appear in >50% of examples.
-
-**Fix**: Undersample common tools:
-```python
-from collections import Counter
-import random
-
-tool_counts = Counter()
-for ex in dataset:
-    for call in ex.get("tool_calls", []):
-        tool_counts[call["tool"]] += 1
-
-top_tools = [t for t, c in tool_counts.most_common(int(0.1 * len(tool_counts)))]
-dataset = dataset.filter(
-    lambda x: not any(c["tool"] in top_tools for c in x.get("tool_calls", []))
-    or random.random() < 0.5
-)
-```
-
-## Data Versioning with Git
-
-Track dataset config and generation code with Git (actual data files are gitignored):
+If you want to publish the raw synthetic dataset:
 
 ```bash
-# Tag current state
-git tag dataset-v1.0
-git push --tags
+python scripts/push_dataset_to_hub.py \
+  --repo-id your-user/qwen3-8b-synthetic-tool-use \
+  --data-dir data/raw/synthetic
 ```
-
-The processed Arrow files in `data/processed/` are regenerated from scratch
-by `bash scripts/prepare_datasets.sh` and are gitignored.
-
-## Reproducibility Checklist
-
-? Random seed (42) for all generation and splits
-? `generate_synthetic.py` versioned in Git
-? `configs/dataset_config.yaml` versioned in Git
-? License: MIT (see `DATASET_CARD.md`)
-? Sample examples in `DATASET_CARD.md`
-? Schema documented above
-
----
-**Last Updated**: March 2026
