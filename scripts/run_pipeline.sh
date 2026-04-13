@@ -15,6 +15,7 @@
 #   bash scripts/run_pipeline.sh sft       # only SFT stage
 #   bash scripts/run_pipeline.sh grpo      # only GRPO stage
 #   bash scripts/run_pipeline.sh compare   # only comparison
+#   bash scripts/run_pipeline.sh all-final-compare  # train stages, then run one final compare
 
 set -e
 
@@ -34,6 +35,7 @@ SFT_OUTPUT="${SFT_OUTPUT:-./outputs/sft}"
 GRPO_OUTPUT="${GRPO_OUTPUT:-./outputs/grpo}"
 EVAL_SAMPLES="${EVAL_SAMPLES:-1000}"
 BENCHMARK_FILTER="${BENCHMARK_FILTER:-}"
+EVAL_CHECKPOINT_FILE="${EVAL_CHECKPOINT_FILE:-outputs/eval_checkpoint.json}"
 
 SFT_LORA_RANK="${SFT_LORA_RANK:-64}"
 GRPO_LORA_RANK="${GRPO_LORA_RANK:-$SFT_LORA_RANK}"
@@ -43,6 +45,12 @@ WANDB_ENTITY="${WANDB_ENTITY:-}"
 HF_REPO_ID="${HF_REPO_ID:-}"
 LOCAL_VALIDATE="${LOCAL_VALIDATE:-false}"
 DRY_RUN_ARGS=""
+RUN_INTERMEDIATE_STAGE_EVALS="${RUN_INTERMEDIATE_STAGE_EVALS:-true}"
+COMPARE_USE_LOCAL_RESULTS="${COMPARE_USE_LOCAL_RESULTS:-true}"
+
+if [[ "$STAGE" == "all-final-compare" ]]; then
+    RUN_INTERMEDIATE_STAGE_EVALS="false"
+fi
 
 _fail() {
     echo ""
@@ -125,6 +133,7 @@ echo "  Eval samples    : $EVAL_SAMPLES"
 echo "  SFT LoRA rank   : $SFT_LORA_RANK"
 echo "  GRPO LoRA rank  : $GRPO_LORA_RANK"
 echo "  Stage           : $STAGE"
+echo "  Eval checkpoint : $EVAL_CHECKPOINT_FILE"
 echo "  W&B project     : $WANDB_PROJECT"
 if [ -n "$WANDB_ENTITY" ]; then echo "  W&B entity      : $WANDB_ENTITY"; fi
 if [ -n "$HF_REPO_ID" ]; then echo "  HF repo ID      : $HF_REPO_ID"; fi
@@ -152,6 +161,7 @@ if [[ "$STAGE" == "baseline" || "$STAGE" == "all" ]]; then
             --mode baseline \
             --base-model "$BASE_MODEL" \
             --max-samples "$EVAL_SAMPLES" \
+            --checkpoint-file "$EVAL_CHECKPOINT_FILE" \
             --output outputs/eval_baseline.json \
             ${BENCHMARK_FILTER:+--benchmarks $BENCHMARK_FILTER}
     fi
@@ -160,7 +170,7 @@ fi
 # --------------------------------------------------
 # Stage 1 — SFT training + evaluation
 # --------------------------------------------------
-if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
+if [[ "$STAGE" == "sft" || "$STAGE" == "all" || "$STAGE" == "all-final-compare" ]]; then
     echo ""
     echo ">>> Stage 1: SFT Training (Tinker)"
 
@@ -177,10 +187,16 @@ if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
         --save-steps 500 \
         $DRY_RUN_ARGS
 
-    _require_file "$SFT_OUTPUT/checkpoints.jsonl" "SFT training did not produce checkpoints.jsonl"
+    if [ "$LOCAL_VALIDATE" = "true" ]; then
+        _require_file "$SFT_OUTPUT/dry_run_summary.json" "SFT dry-run did not produce dry_run_summary.json"
+    else
+        _require_file "$SFT_OUTPUT/checkpoints.jsonl" "SFT training did not produce checkpoints.jsonl"
+    fi
 
     if [ "$LOCAL_VALIDATE" = "true" ]; then
         echo ">>> Stage 1 evaluation skipped in local validation mode"
+    elif [ "$RUN_INTERMEDIATE_STAGE_EVALS" != "true" ]; then
+        echo ">>> Stage 1 evaluation skipped (RUN_INTERMEDIATE_STAGE_EVALS=false)"
     else
         echo ""
         echo ">>> Stage 1: SFT Evaluation"
@@ -193,6 +209,7 @@ if [[ "$STAGE" == "sft" || "$STAGE" == "all" ]]; then
                 --base-model "$BASE_MODEL" \
                 --sft-sampler-path "$SFT_SAMPLER" \
                 --max-samples "$EVAL_SAMPLES" \
+                --checkpoint-file "$EVAL_CHECKPOINT_FILE" \
                 --output outputs/eval_sft.json \
                 ${BENCHMARK_FILTER:+--benchmarks $BENCHMARK_FILTER}
         fi
@@ -202,8 +219,12 @@ fi
 # --------------------------------------------------
 # Stage 2 — GRPO training + evaluation
 # --------------------------------------------------
-if [[ "$STAGE" == "grpo" || "$STAGE" == "all" ]]; then
-    _require_file "$SFT_OUTPUT/checkpoints.jsonl" "GRPO requires SFT output; run SFT stage first"
+if [[ "$STAGE" == "grpo" || "$STAGE" == "all" || "$STAGE" == "all-final-compare" ]]; then
+    if [ "$LOCAL_VALIDATE" = "true" ]; then
+        _require_file "$SFT_OUTPUT/dry_run_summary.json" "GRPO local validation requires SFT dry-run output; run SFT stage first"
+    else
+        _require_file "$SFT_OUTPUT/checkpoints.jsonl" "GRPO requires SFT output; run SFT stage first"
+    fi
 
     if [[ "$GRPO_LORA_RANK" != "$SFT_LORA_RANK" ]]; then
         _fail "LoRA rank mismatch: SFT_LORA_RANK=$SFT_LORA_RANK but GRPO_LORA_RANK=$GRPO_LORA_RANK. With latest Tinker checkpoint loading, these must match."
@@ -223,10 +244,16 @@ if [[ "$STAGE" == "grpo" || "$STAGE" == "all" ]]; then
         --save-steps 17 \
         $DRY_RUN_ARGS
 
-    _require_file "$GRPO_OUTPUT/checkpoints.jsonl" "GRPO training did not produce checkpoints.jsonl"
+    if [ "$LOCAL_VALIDATE" = "true" ]; then
+        _require_file "$GRPO_OUTPUT/dry_run_summary.json" "GRPO dry-run did not produce dry_run_summary.json"
+    else
+        _require_file "$GRPO_OUTPUT/checkpoints.jsonl" "GRPO training did not produce checkpoints.jsonl"
+    fi
 
     if [ "$LOCAL_VALIDATE" = "true" ]; then
         echo ">>> Stage 2 evaluation skipped in local validation mode"
+    elif [ "$RUN_INTERMEDIATE_STAGE_EVALS" != "true" ]; then
+        echo ">>> Stage 2 evaluation skipped (RUN_INTERMEDIATE_STAGE_EVALS=false)"
     else
         echo ""
         echo ">>> Stage 2: GRPO Evaluation"
@@ -239,6 +266,7 @@ if [[ "$STAGE" == "grpo" || "$STAGE" == "all" ]]; then
                 --base-model "$BASE_MODEL" \
                 --grpo-sampler-path "$GRPO_SAMPLER" \
                 --max-samples "$EVAL_SAMPLES" \
+                --checkpoint-file "$EVAL_CHECKPOINT_FILE" \
                 --output outputs/eval_grpo.json \
                 ${BENCHMARK_FILTER:+--benchmarks $BENCHMARK_FILTER}
         fi
@@ -248,10 +276,23 @@ fi
 # --------------------------------------------------
 # Stage 3 — Cross-stage comparison
 # --------------------------------------------------
-if [[ "$STAGE" == "compare" || "$STAGE" == "all" ]]; then
+if [[ "$STAGE" == "compare" || "$STAGE" == "all" || "$STAGE" == "all-final-compare" ]]; then
     if [ "$LOCAL_VALIDATE" = "true" ]; then
         echo ""
         echo ">>> Stage 3: Cross-stage comparison skipped in local validation mode"
+    elif [ "$RUN_INTERMEDIATE_STAGE_EVALS" = "true" ] && \
+         [ "$COMPARE_USE_LOCAL_RESULTS" = "true" ] && \
+         [ -f "outputs/eval_baseline.json" ] && \
+         [ -f "outputs/eval_sft.json" ] && \
+         [ -f "outputs/eval_grpo.json" ]; then
+        echo ""
+        echo ">>> Stage 3: Cross-Stage Comparison (local saved results)"
+        python3 src/evaluate.py \
+            --mode local-compare \
+            --baseline-results outputs/eval_baseline.json \
+            --sft-results outputs/eval_sft.json \
+            --grpo-results outputs/eval_grpo.json \
+            --output outputs/eval_comparison.json
     else
         echo ""
         echo ">>> Stage 3: Cross-Stage Comparison"
@@ -263,6 +304,7 @@ if [[ "$STAGE" == "compare" || "$STAGE" == "all" ]]; then
             ${SFT_SAMPLER:+--sft-sampler-path "$SFT_SAMPLER"} \
             ${GRPO_SAMPLER:+--grpo-sampler-path "$GRPO_SAMPLER"} \
             --max-samples "$EVAL_SAMPLES" \
+            --checkpoint-file "$EVAL_CHECKPOINT_FILE" \
             --output outputs/eval_comparison.json \
             ${BENCHMARK_FILTER:+--benchmarks $BENCHMARK_FILTER}
     fi

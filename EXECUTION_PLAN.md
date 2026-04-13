@@ -91,6 +91,15 @@ checkpoints.
 bash scripts/run_pipeline.sh all
 ```
 
+### Lower-cost remote pipeline
+
+```bash
+bash scripts/run_pipeline.sh all-final-compare
+```
+
+This skips the intermediate SFT and GRPO eval passes and relies on one final
+comparison run instead.
+
 ### Local validation path
 
 ```bash

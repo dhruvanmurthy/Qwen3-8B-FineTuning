@@ -15,6 +15,7 @@ import argparse
 import asyncio
 import json
 import logging
+import math
 import os
 import random
 from pathlib import Path
@@ -81,6 +82,22 @@ def _run_dry_run_sft(args, n_train: int, n_val: int) -> None:
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
     logger.info("Wrote dry-run summary: %s", summary_path)
+
+
+def _epoch_batches(
+    train_datums: List[tinker.Datum],
+    batch_size: int,
+    seed: int,
+    epoch: int,
+) -> List[List[tinker.Datum]]:
+    """Create deterministic epoch batches so resume can skip prior work exactly."""
+    indices = list(range(len(train_datums)))
+    random.Random(seed + epoch).shuffle(indices)
+    batches: List[List[tinker.Datum]] = []
+    for start in range(0, len(indices), batch_size):
+        batch_indices = indices[start : start + batch_size]
+        batches.append([train_datums[i] for i in batch_indices])
+    return batches
 
 
 def _resolve_hf_repo_id(repo_id: str) -> str:
@@ -277,10 +294,7 @@ async def train_sft(args):
     train_datums = _conversations_to_datums(
         train_conversations, renderer, args.max_seq_length
     )
-    val_datums = _conversations_to_datums(
-        val_conversations, renderer, args.max_seq_length
-    )
-    logger.info("Train datums: %d, Val datums: %d", len(train_datums), len(val_datums))
+    logger.info("Train datums: %d", len(train_datums))
 
     if not train_datums:
         raise RuntimeError("No valid training datums after conversion. Check data format.")
@@ -294,14 +308,15 @@ async def train_sft(args):
 
     n_epochs = args.num_epochs
     batch_size = args.batch_size
-    total_steps = (len(train_datums) * n_epochs) // batch_size
+    steps_per_epoch = math.ceil(len(train_datums) / batch_size)
+    total_steps = steps_per_epoch * n_epochs
     log_every = args.logging_steps
     save_every = args.save_steps
     wandb.config.update({
         "n_train_conversations": len(train_conversations),
         "n_val_conversations": len(val_conversations),
         "n_train_datums": len(train_datums),
-        "n_val_datums": len(val_datums),
+        "steps_per_epoch": steps_per_epoch,
         "total_steps_planned": total_steps,
     })
 
@@ -316,14 +331,24 @@ async def train_sft(args):
     logger.info("  Total steps     : %d", total_steps)
     logger.info("  Max seq length  : %d", args.max_seq_length)
 
-    global_step = 0
-    for epoch in range(n_epochs):
-        random.shuffle(train_datums)
+    start_step = resume_ckpt.batch if resume_ckpt and resume_ckpt.batch else 0
+    if start_step >= total_steps:
+        logger.warning(
+            "Resume step (%d) is already >= total planned steps (%d). Skipping training loop.",
+            start_step,
+            total_steps,
+        )
 
-        for batch_start in range(0, len(train_datums), batch_size):
-            batch = train_datums[batch_start : batch_start + batch_size]
-            if not batch:
-                continue
+    global_step = start_step
+    start_epoch = start_step // steps_per_epoch if steps_per_epoch else 0
+    start_batch_in_epoch = start_step % steps_per_epoch if steps_per_epoch else 0
+
+    for epoch in range(start_epoch, n_epochs):
+        epoch_batches = _epoch_batches(train_datums, batch_size, args.seed, epoch)
+        batch_start_idx = start_batch_in_epoch if epoch == start_epoch else 0
+
+        for batch_idx in range(batch_start_idx, len(epoch_batches)):
+            batch = epoch_batches[batch_idx]
 
             # Forward + backward
             fwd_bwd_future = await training_client.forward_backward_async(
@@ -345,7 +370,7 @@ async def train_sft(args):
                 )
                 log_dict = {
                     "train/epoch": epoch + 1,
-                    "train/epoch_progress": (batch_start + batch_size) / max(len(train_datums), 1),
+                    "train/epoch_progress": (batch_idx + 1) / max(len(epoch_batches), 1),
                     "train/samples_seen": global_step * batch_size,
                 }
                 if loss_val is not None:
@@ -361,6 +386,7 @@ async def train_sft(args):
                     loop_state={"batch": global_step, "epoch": epoch + 1},
                     kind="both",
                 )
+        start_batch_in_epoch = 0
 
     # ---- Final save ----
     logger.info("Saving final weights to %s...", args.output_dir)

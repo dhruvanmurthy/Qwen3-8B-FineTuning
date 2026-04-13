@@ -84,6 +84,7 @@ bash scripts/run_pipeline.sh baseline
 bash scripts/run_pipeline.sh sft
 bash scripts/run_pipeline.sh grpo
 bash scripts/run_pipeline.sh compare
+bash scripts/run_pipeline.sh all-final-compare
 ```
 
 ## Local Validation Without Remote Training
@@ -97,6 +98,15 @@ LOCAL_VALIDATE=true bash scripts/run_pipeline.sh all
 
 This skips remote inference and training, switches the default base model to
 `sshleifer/tiny-gpt2`, and validates the local pipeline structure.
+
+If you want the cheapest full orchestration path on Tinker, use:
+
+```bash
+bash scripts/run_pipeline.sh all-final-compare
+```
+
+That trains SFT and GRPO, skips the intermediate per-stage eval passes, and
+does one final comparison pass at the end.
 
 ## Smoke Test
 

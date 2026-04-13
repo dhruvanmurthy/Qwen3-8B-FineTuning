@@ -92,6 +92,17 @@ python src/evaluate.py \
   --output outputs/eval_comparison.json
 ```
 
+### Comparison from saved local JSON outputs
+
+```bash
+python src/evaluate.py \
+  --mode local-compare \
+  --baseline-results outputs/eval_baseline.json \
+  --sft-results outputs/eval_sft.json \
+  --grpo-results outputs/eval_grpo.json \
+  --output outputs/eval_comparison.json
+```
+
 ### Full sequence
 
 ```bash
@@ -126,6 +137,10 @@ python src/evaluate.py \
 ```
 
 This is how the smoke test keeps the evaluation pass small.
+
+The main evaluator also generates one cached response per example per stage and
+reuses that output across the requested metrics, which reduces repeated Tinker
+inference compared with the older per-metric generation flow.
 
 ## Sampler Resolution
 
