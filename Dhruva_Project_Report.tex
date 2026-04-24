@@ -1,0 +1,1161 @@
+\documentclass[12pt, a4paper]{article}
+
+% ── Packages ─────────────────────────────────────────────────────────────────
+\usepackage[a4paper, left=2.5cm, right=2.5cm, top=3cm, bottom=2.5cm, headheight=15pt]{geometry}
+\usepackage{fontenc}
+\usepackage{inputenc}
+\usepackage{microtype}
+\usepackage{setspace}
+\usepackage{parskip}
+\usepackage{titlesec}
+\usepackage{titletoc}
+\usepackage{fancyhdr}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{mdframed}
+\usepackage{caption}
+\usepackage{float}
+\usepackage{ragged2e}
+\usepackage{listings}
+\usepackage{xcolor}
+
+% ── Hyperref setup ───────────────────────────────────────────────────────────
+\hypersetup{
+    colorlinks=false,
+    hidelinks,
+    pdftitle={Qwen3-8B Fine-Tuning for Structured Tool Use},
+    pdfauthor={Dhruva N},
+    pdfsubject={Project Report},
+}
+
+% ── Code listing style ───────────────────────────────────────────────────────
+\lstset{
+    basicstyle=\ttfamily\small,
+    backgroundcolor=\color{gray!8},
+    frame=single,
+    framerule=0.4pt,
+    breaklines=true,
+    columns=fullflexible,
+    keepspaces=true,
+}
+
+% ── Section title formatting ─────────────────────────────────────────────────
+\titleformat{\section}
+  {\Large\bfseries}
+  {\thesection.}{0.6em}{}
+  [\vspace{-4pt}\rule{\linewidth}{0.5pt}\vspace{2pt}]
+
+\titleformat{\subsection}
+  {\normalsize\bfseries}
+  {\thesubsection}{0.5em}{}
+
+\titleformat{\subsubsection}
+  {\normalsize\bfseries\itshape}
+  {\thesubsubsection}{0.5em}{}
+
+\titlespacing{\section}{0pt}{22pt}{8pt}
+\titlespacing{\subsection}{0pt}{14pt}{5pt}
+\titlespacing{\subsubsection}{0pt}{10pt}{4pt}
+
+% ── Header / Footer ──────────────────────────────────────────────────────────
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{}
+\fancyhead[R]{}
+\fancyfoot[L]{}
+\fancyfoot[R]{\small\thepage}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% ── Abstract box ─────────────────────────────────────────────────────────────
+\newmdenv[
+  linewidth=0pt,
+  innerleftmargin=0pt,
+  innerrightmargin=0pt,
+  innertopmargin=4pt,
+  innerbottommargin=4pt,
+  skipabove=8pt,
+  skipbelow=8pt
+]{abstractbox}
+
+\newmdenv[
+  linewidth=0.6pt,
+  innerleftmargin=12pt,
+  innerrightmargin=12pt,
+  innertopmargin=8pt,
+  innerbottommargin=8pt,
+  skipabove=6pt,
+  skipbelow=6pt
+]{equationbox}
+
+% ── Table helpers ─────────────────────────────────────────────────────────────
+\newcommand{\thead}[1]{\textbf{#1}}
+\newcolumntype{L}[1]{>{\RaggedRight\arraybackslash}p{#1}}
+\newcolumntype{C}[1]{>{\Centering\arraybackslash}p{#1}}
+
+% ── Misc ─────────────────────────────────────────────────────────────────────
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\onehalfspacing
+\captionsetup{font=small, labelfont=bf, textfont=it, skip=4pt}
+\renewcommand{\arraystretch}{1.3}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\begin{document}
+
+% ── COVER PAGE ───────────────────────────────────────────────────────────────
+\thispagestyle{empty}
+\singlespacing
+\vspace*{0.6cm}
+
+\begin{center}
+{\small\textbf{\MakeUppercase{Project Report}}}\\[6pt]
+{\rule{\linewidth}{1pt}}\\[8pt]
+
+{\LARGE\bfseries
+Fine-Tuning Qwen3-8B for\\[4pt]
+Structured Tool Use
+}\\[8pt]
+{\rule{\linewidth}{1pt}}\\[10pt]
+
+{\large\textit{SFT and GRPO Pipeline with Tinker Remote Infrastructure}}\\[18pt]
+
+{\large\textbf{Dhruva N}}\\[4pt]
+{Department of Data Science and Artificial Intelligence}\\[4pt]
+{April 2026}
+\end{center}
+
+\vspace{0.7cm}
+
+\begin{abstractbox}
+\textbf{Abstract}\\[6pt]
+This report documents the design, implementation, and results of a fine-tuning pipeline
+for \texttt{Qwen/Qwen3-8B}, targeting reliable multi-step structured tool calling. The
+pipeline proceeds in three stages: zero-shot baseline evaluation, Supervised Fine-Tuning
+(SFT) with LoRA adapters, and Group Relative Policy Optimization (GRPO) applied on top
+of the SFT checkpoint. Training is performed on Tinker remote GPUs; local dry-run
+validation uses a lightweight surrogate model (\texttt{sshleifer/tiny-gpt2}) to verify
+pipeline wiring without consuming remote compute. The training dataset is entirely synthetic,
+generated from a library of 18 tool templates covering single-step and multi-step tool
+chains. Five programmatic reward signals drive GRPO without requiring any human-annotated
+preference pairs. Evaluation compares all three stages across tool selection accuracy,
+argument accuracy, schema compliance, and multi-step chain success, with latency measurements
+included. GRPO produces the best argument accuracy (0.321) and the highest multi-step success
+rate (0.413), while also reducing the fraction of zero-call failures in multi-step scenarios.
+The end-to-end pipeline is fully reproducible via a single shell entrypoint.
+\end{abstractbox}
+
+\vspace{0.5cm}
+
+\begin{center}
+\small
+\textbf{Keywords:} Qwen3-8B $\cdot$ LLM Fine-Tuning $\cdot$ SFT $\cdot$ GRPO $\cdot$ LoRA $\cdot$
+Tool Calling $\cdot$ Function Calling $\cdot$ Synthetic Data $\cdot$ Tinker $\cdot$
+Multi-Step Reasoning $\cdot$ Reward Functions $\cdot$ W\&B
+\end{center}
+
+\newpage
+\onehalfspacing
+
+% ── TABLE OF CONTENTS ────────────────────────────────────────────────────────
+\tableofcontents
+\newpage
+
+% =============================================================================
+\section{Project Overview}
+% =============================================================================
+
+This repository implements a four-stage pipeline for fine-tuning
+\texttt{Qwen/Qwen3-8B} to reliably produce structured tool calls in response
+to natural language queries. The central research question is whether a model
+that has not been specifically instruction-tuned for a tool-calling schema can
+be made to emit well-formed, executable tool calls through SFT alone, or
+whether a reinforcement learning stage (GRPO) is needed to enforce compliance
+with the output schema and improve multi-step chain quality.
+
+The source repository for this report is:
+\href{https://github.com/dhruvanmurthy/Qwen3-8B-FineTuning}{GitHub repository: Qwen3-8B-FineTuning}.
+
+\subsection{Motivation}
+
+Large language models are increasingly used as the reasoning backbone of
+agentic systems. In such architectures the model must not merely answer
+questions in natural language --- it must decide which external tool (API,
+calculator, calendar service, etc.) to invoke, supply the correct arguments,
+and, in multi-step scenarios, chain several tool calls in the right order
+before synthesising a final response. This is demanding because:
+
+\begin{itemize}[leftmargin=1.5em, itemsep=4pt]
+  \item The model must respect a strict output schema even when its pre-training
+    distribution favours natural language responses.
+  \item In multi-step tasks the model must keep track of which tools have
+    already been called and what their results were.
+  \item Argument values must be grounded in the user query, not hallucinated.
+\end{itemize}
+
+Supervised fine-tuning is a natural first step, but imitation learning on
+demonstration data does not provide a direct gradient signal towards schema
+compliance. GRPO, which assigns relative rewards across a group of sampled
+completions, supplies exactly that signal --- and does so without a separately
+trained reward model or human preference labels.
+
+\subsection{Pipeline Stages}
+
+The pipeline is organised into four stages executed in sequence:
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=5pt]
+  \item \textbf{Stage 0 -- Baseline Evaluation.}
+    Evaluate zero-shot performance of the base \texttt{Qwen/Qwen3-8B} model
+    with no fine-tuning. Establishes the floor for all comparisons.
+  \item \textbf{Stage 1 -- SFT.}
+    Fine-tune LoRA adapters on synthetic tool-use conversations using
+    cross-entropy (next-token prediction) loss. Uses Tinker remote GPUs.
+  \item \textbf{Stage 2 -- GRPO.}
+    Resume training from the SFT checkpoint using Group Relative Policy
+    Optimization with five programmatic reward signals. Same LoRA rank as SFT.
+  \item \textbf{Stage 3 -- Comparison.}
+    Run the full evaluation suite against all three checkpoints and produce
+    a side-by-side metrics table.
+\end{enumerate}
+
+\subsection{Repository Layout}
+
+\begin{table}[H]
+\centering
+\caption{Key files and directories in the repository.}
+\begin{tabularx}{\linewidth}{L{6.2cm} L{8.8cm}}
+\toprule
+\thead{Path} & \thead{Purpose} \\
+\midrule
+\texttt{src/train.py} & SFT training script (Tinker-based) \\
+\texttt{src/train\_grpo.py} & GRPO training script (Tinker-based) \\
+\texttt{src/evaluate.py} & Three-stage evaluation harness \\
+\texttt{src/rewards.py} & Programmatic reward functions \\
+\texttt{src/data\_loader.py} & Dataset loading and preprocessing \\
+\texttt{src/constants.py} & Shared constants including the system prompt \\
+\texttt{scripts/run\_pipeline.sh} & Canonical end-to-end entrypoint \\
+\texttt{scripts/generate\_synthetic.py} & Synthetic dataset generator \\
+\texttt{scripts/prepare\_datasets.sh} & Data generation and tokenization \\
+\texttt{configs/dataset\_config.yaml} & Dataset source and split configuration \\
+\texttt{data/raw/synthetic/} & Generated JSONL training examples \\
+\texttt{data/processed/} & Tokenized Arrow splits and test raw JSONL \\
+\texttt{outputs/} & Evaluation JSON files and training artifacts \\
+\texttt{wandb/} & W\&B run logs from dry-run validation sessions \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\newpage
+
+% =============================================================================
+\section{Base Model and Infrastructure}
+% =============================================================================
+
+\subsection{Base Model: Qwen3-8B}
+
+The base model for all experiments is \texttt{Qwen/Qwen3-8B}, the 8-billion
+parameter instruct variant from Alibaba Cloud's Qwen3 series. Key properties
+relevant to this project:
+
+\begin{itemize}[leftmargin=1.5em, itemsep=4pt]
+  \item Trained on a large multilingual corpus with instruction tuning and
+    RLHF alignment.
+  \item Supports extended context lengths up to 32\,768 tokens (pipeline uses
+    at most 2\,048 tokens).
+  \item Includes a built-in thinking mode; the reward extraction code in
+    \texttt{src/rewards.py} strips \texttt{<think>} blocks before parsing tool
+    calls to avoid false negatives.
+  \item Achieves strong zero-shot tool-selection performance
+    (\textasciitilde78\% on the synthetic benchmark), providing a meaningful
+    baseline above which both fine-tuning stages are measured.
+\end{itemize}
+
+\subsection{Training Infrastructure: Tinker}
+
+All SFT and GRPO training passes run on \textbf{Tinker} remote GPUs, a managed
+machine learning infrastructure service. The local machine is responsible only
+for data preparation and reward grading; forward/backward passes and parameter
+updates are executed remotely. This architecture has two practical
+consequences:
+
+\begin{itemize}[leftmargin=1.5em, itemsep=4pt]
+  \item \textbf{No local GPU required for full training.} The pipeline requires
+    only \texttt{TINKER\_API\_KEY} in the environment.
+  \item \textbf{Local dry-run mode.} Setting \texttt{LOCAL\_VALIDATE=true}
+    swaps the base model to \texttt{sshleifer/tiny-gpt2} and enables
+    \texttt{--dry-run} on all training scripts, allowing complete end-to-end
+    pipeline wiring to be tested without Tinker API access or remote compute.
+\end{itemize}
+
+\subsection{Local Validation Environment}
+
+Local dry-run validation was performed using \texttt{sshleifer/tiny-gpt2} as a
+surrogate model to verify end-to-end pipeline wiring without consuming remote
+compute. Key environment details:
+
+\begin{table}[H]
+\centering
+\caption{Local validation environment from W\&B metadata.}
+\begin{tabularx}{\linewidth}{L{3.5cm} L{10.7cm}}
+\toprule
+\thead{Property} & \thead{Value} \\
+\midrule
+OS & Linux (WSL2, kernel 6.6.87.2-microsoft-standard) \\
+Python & CPython 3.11.15 \\
+GPU & NVIDIA GeForce RTX 3060 Laptop GPU (6\,GB VRAM) \\
+CUDA & 13.0 \\
+W\&B CLI & 0.25.1 \\
+Host & DHRUVA-LAPTOP \\
+Conda env & rl-lab \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Local dry-run executions confirmed that the SFT and GRPO scripts reach
+checkpointing and reward-logging code paths correctly, and that the pipeline
+completes without errors under \texttt{LOCAL\_VALIDATE=true}.
+
+\subsection{Experiment Tracking: Weights \& Biases}
+
+W\&B project \texttt{qwen3-8b-tool-use} is used for experiment tracking.
+The SFT script logs \texttt{train/epoch}, \texttt{train/loss}, and
+\texttt{train/samples\_seen} at each step. The GRPO script logs
+\texttt{train/reward\_mean}, \texttt{train/frac\_degenerate},
+\texttt{train/n\_datums}, and \texttt{train/n\_degenerate\_groups}.
+W\&B is initialised in \textit{disabled} mode when \texttt{WANDB\_API\_KEY}
+is absent, so all pipeline runs succeed silently without it.
+
+\newpage
+
+% =============================================================================
+\section{Dataset Design and Preparation}
+% =============================================================================
+
+\subsection{Synthetic Data Strategy}
+
+The dataset used for training and evaluation is \textbf{entirely synthetic},
+generated by \texttt{scripts/generate\_synthetic.py}. This choice was made
+deliberately:
+
+\begin{itemize}[leftmargin=1.5em, itemsep=4pt]
+  \item No licensing constraints from external corpora.
+  \item Full control over tool diversity, argument type coverage, and
+    multi-step chain structure.
+  \item Deterministic reproduction with a fixed seed (\texttt{seed=42}).
+\end{itemize}
+
+The generator constructs two JSONL files:
+
+\begin{itemize}[leftmargin=1.5em, itemsep=3pt]
+  \item \texttt{data/raw/synthetic/synthetic\_single.jsonl} --- single-tool-call examples.
+  \item \texttt{data/raw/synthetic/synthetic\_multistep.jsonl} --- multi-tool-chain examples.
+\end{itemize}
+
+\subsection{Tool Catalogue}
+
+The generator defines a catalogue of 18 tools. Table~\ref{tab:tools} lists
+the tools used for single-step generation. Multi-step chains compose subsets
+of these tools.
+
+\begin{table}[H]
+\centering
+\caption{Synthetic tool catalogue (single-step generators).}
+\label{tab:tools}
+\begin{tabularx}{\linewidth}{L{4.2cm} L{9.8cm}}
+\toprule
+\thead{Tool Name} & \thead{Description / Parameters} \\
+\midrule
+\texttt{get\_weather} & Current weather for a city; \texttt{city} (str, required), \texttt{units} (C/F, optional) \\
+\texttt{get\_stock\_price} & Stock price for a ticker; \texttt{symbol} (str), \texttt{currency} (optional) \\
+\texttt{search\_web} & Web search; \texttt{query} (str), \texttt{num\_results} (int, optional) \\
+\texttt{send\_email} & Send email; \texttt{to}, \texttt{subject}, \texttt{body} (str, required), \texttt{cc} (optional) \\
+\texttt{create\_calendar\_event} & Calendar entry; \texttt{title}, \texttt{date}, \texttt{time}, \texttt{duration\_minutes}, \texttt{attendees} \\
+\texttt{translate\_text} & Translation; \texttt{text}, \texttt{target\_lang} (required), \texttt{source\_lang} (optional) \\
+\texttt{get\_news} & News articles; \texttt{topic}, \texttt{num\_articles}, \texttt{language} \\
+\texttt{calculate} & Math expression; \texttt{expression} (str, required) \\
+\texttt{get\_restaurant\_info} & Restaurant lookup; \texttt{name} (str, required) \\
+\texttt{convert\_currency} & Currency conversion; \texttt{amount}, \texttt{from\_currency}, \texttt{to\_currency} \\
+\texttt{convert\_units} & Unit conversion; \texttt{value}, \texttt{from\_unit}, \texttt{to\_unit} \\
+\texttt{set\_reminder} & Reminder; \texttt{message}, \texttt{datetime} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Multi-step categories include: translate+weather, stock+convert, weather+remind,
+search+email, and other combinations, each exercising 2--3 tool calls in a
+single training example.
+
+\subsection{Data Format}
+
+Every generated example carries the following structured fields:
+
+\begin{itemize}[leftmargin=1.5em, itemsep=3pt]
+  \item \textbf{\texttt{instruction}} --- the natural language user query.
+  \item \textbf{\texttt{tools}} --- JSON list of available tool definitions visible to the model.
+  \item \textbf{\texttt{tool\_calls}} --- ground-truth list of \texttt{\{name, arguments\}} dicts.
+  \item \textbf{\texttt{category}} --- tool domain label (e.g., \texttt{weather}, \texttt{stock}).
+  \item \textbf{\texttt{num\_steps}} --- number of tool calls required (1 for single-step).
+  \item \textbf{\texttt{text}} --- full formatted example in the target output format.
+\end{itemize}
+
+The canonical output format for training uses \texttt{<tool\_call>} XML tags:
+
+\begin{lstlisting}
+[weather] USER: What is the weather like in Tokyo?
+ASSISTANT: <tool_call>
+{"name": "get_weather", "arguments": {"city": "Tokyo", "units": "C"}}
+</tool_call>
+\end{lstlisting}
+
+\subsection{Preprocessing Pipeline}
+
+Raw JSONL examples are processed by \texttt{src/data\_loader.py} through
+\texttt{ToolUseDataLoader}. The preprocessing steps are:
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=5pt]
+  \item \textbf{Deduplication} --- MD5 hash of the full serialised row;
+    first occurrence is kept.
+  \item \textbf{Incomplete filtering} --- examples lacking any meaningful
+    content field are dropped.
+  \item \textbf{Whitespace normalisation} --- leading/trailing spaces removed.
+  \item \textbf{Source balancing} --- enabled by default when multiple sources
+    are configured.
+  \item \textbf{Train/validation/test splitting} --- 80/10/10 ratio, seeded
+    with 42 for reproducibility.
+  \item \textbf{Tokenization} --- produces \texttt{input\_ids},
+    \texttt{attention\_mask}, and \texttt{labels} columns; saved as
+    Hugging Face Arrow files under \texttt{data/processed/}.
+\end{enumerate}
+
+A separate raw test split is saved to \texttt{data/processed/test\_raw.jsonl}
+\textit{before} tokenization so that \texttt{src/evaluate.py} can access the
+original prompt text, expected tool calls, and tool context metadata.
+
+\subsection{Dataset Statistics}
+
+\begin{table}[H]
+\centering
+\caption{Dataset statistics after preprocessing (default configuration).}
+\begin{tabularx}{\linewidth}{L{5cm} C{9.2cm}}
+\toprule
+\thead{Property} & \thead{Value} \\
+\midrule
+Raw generated examples & 15\,000 (cap from \texttt{dataset\_config.yaml}) \\
+After MD5 deduplication & ${\approx}$12\,280 \\
+Training split ($80\%$) & ${\approx}$9\,824 \\
+Validation split ($10\%$) & ${\approx}$1\,228 \\
+Test split ($10\%$) & ${\approx}$1\,228 \\
+Max sequence length & 2\,048 tokens \\
+Language & English only \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The loader reads all JSONL rows before applying the \texttt{samples=15000}
+cap; the extra rows represent raw generator output that is subsequently
+filtered, so the final split counts are as stated above.
+
+\newpage
+
+% =============================================================================
+\section{System Prompt and Output Schema}
+% =============================================================================
+
+A shared system prompt defined in \texttt{src/constants.py} as
+\texttt{TOOL\_USE\_SYSTEM\_PROMPT} is prepended to every conversation during
+both training and evaluation. It specifies the exact output format the model
+must produce:
+
+\begin{lstlisting}
+You are a helpful assistant that can use tools to answer user queries.
+
+IMPORTANT INSTRUCTIONS:
+1. Analyze the user's request and determine ALL tools needed to fully complete it.
+2. If the request requires multiple steps, emit one <tool_call> block per step
+   in the correct order.
+3. Respond ONLY with tool call(s) - no explanations, no thinking text, no other output.
+4. Each tool call must use <tool_call> and </tool_call> tags wrapping a JSON object
+   with exactly 'name' and 'arguments' keys.
+
+SINGLE-STEP FORMAT:
+<tool_call>
+{"name": "tool_name", "arguments": {"param_key": "param_value"}}
+</tool_call>
+
+MULTI-STEP FORMAT (emit all calls in sequence):
+<tool_call>
+{"name": "first_tool", "arguments": {"param": "value"}}
+</tool_call>
+<tool_call>
+{"name": "second_tool", "arguments": {"param": "value"}}
+</tool_call>
+\end{lstlisting}
+
+The schema requires \textbf{exactly two top-level keys} (\texttt{name} and
+\texttt{arguments}) and prohibits any surrounding prose or chain-of-thought
+text in the output. This strict format is what the reward functions measure
+against.
+
+\newpage
+
+% =============================================================================
+\section{Training Pipeline}
+% =============================================================================
+
+\subsection{Stage 1 --- Supervised Fine-Tuning}
+
+\subsubsection{Objective}
+
+SFT trains LoRA adapters on top of the frozen \texttt{Qwen/Qwen3-8B} weights
+using a standard cross-entropy (next-token prediction) loss over synthetic
+tool-use conversations. The goal is to shift the model's prior toward the
+\texttt{<tool\_call>} output format before GRPO further refines compliance.
+
+\subsubsection{Data Preparation for SFT}
+
+Synthetic examples are loaded from \texttt{data/raw/synthetic/} by
+\texttt{load\_synthetic\_conversations()} in \texttt{src/train.py}. Each
+example is converted to a three-turn chat conversation:
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=3pt]
+  \item \textbf{System} turn --- the shared \texttt{TOOL\_USE\_SYSTEM\_PROMPT}
+    extended with the JSON schema of available tools for this example.
+  \item \textbf{User} turn --- the natural language instruction.
+  \item \textbf{Assistant} turn --- the ground-truth tool call(s) wrapped in
+    \texttt{<tool\_call>} tags.
+\end{enumerate}
+
+Conversations are rendered into Tinker datums via the model's recommended
+renderer (selected by \texttt{get\_recommended\_renderer\_name} from
+\texttt{tinker\_cookbook}).
+
+\subsubsection{LoRA Configuration}
+
+Low-Rank Adaptation (LoRA) is used for parameter-efficient fine-tuning. Only
+the adapter matrices $A$ and $B$ (where $\Delta W = BA$) are trained; the base
+model weights remain frozen. The full LoRA configuration used in this pipeline
+is:
+
+\begin{table}[H]
+\centering
+\caption{LoRA adapter configuration for SFT.}
+\begin{tabularx}{\linewidth}{L{5cm} C{9.2cm}}
+\toprule
+\thead{Hyperparameter} & \thead{Value} \\
+\midrule
+LoRA rank ($r$) & 64 \\
+LoRA alpha ($\alpha$) & 16 \\
+Target modules & \texttt{q\_proj}, \texttt{v\_proj}, \texttt{k\_proj}, \texttt{o\_proj}, \texttt{gate\_proj}, \texttt{up\_proj}, \texttt{down\_proj} \\
+Adapter initialisation & $B = 0$, $A \sim \mathcal{N}(0, \sigma^2)$ (standard LoRA) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsubsection{SFT Hyperparameters}
+
+\begin{table}[H]
+\centering
+\caption{SFT training hyperparameters (canonical pipeline defaults).}
+\begin{tabularx}{\linewidth}{L{5cm} C{9.2cm}}
+\toprule
+\thead{Hyperparameter} & \thead{Value} \\
+\midrule
+Base model & \texttt{Qwen/Qwen3-8B} \\
+LoRA rank & 64 \\
+Learning rate & $2 \times 10^{-4}$ \\
+Batch size & 8 \\
+Epochs & 3 \\
+Max sequence length & 2\,048 tokens \\
+Optimizer & \texttt{paged\_adamw\_8bit} \\
+Logging steps & 10 \\
+Checkpoint save steps & 500 \\
+Seed & 42 \\
+Training platform & Tinker remote GPUs \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsubsection{Checkpointing and Resumption}
+
+Each SFT epoch writes a checkpoint entry to \texttt{outputs/sft/checkpoints.jsonl}
+containing the Tinker sampler path. If training is interrupted, the script can
+resume from the last valid checkpoint by reloading both model weights and
+optimizer state (\texttt{load\_state\_with\_optimizer\_async}). The GRPO stage
+reads the final sampler path from this file to initialise its starting checkpoint.
+
+\subsubsection{Dry-Run Behaviour}
+
+With \texttt{LOCAL\_VALIDATE=true}, the SFT script replaces remote Tinker calls
+with a mock loop. The mock increments a simulated loss from 1.0 toward 0.0 at
+$-0.05$ per step and logs W\&B metrics, allowing end-to-end pipeline wiring
+to be verified without remote GPU access.
+
+\vspace{8pt}
+
+\subsection{Stage 2 --- Group Relative Policy Optimization}
+
+\subsubsection{Algorithm}
+
+GRPO is used as the reinforcement learning stage following SFT. It requires no
+separate reward model and no human preference labels. For each training prompt,
+the model samples a \textbf{group of $G$ completions}. Each completion is scored
+by the programmatic reward functions in \texttt{src/rewards.py}. The
+advantage of completion $i$ within its group is:
+
+\begin{equationbox}
+\[
+  \hat{A}_i = \frac{r_i - \mathrm{mean}(r_{1\ldots G})}{\mathrm{std}(r_{1\ldots G})}
+\]
+\end{equationbox}
+
+This normalised advantage is used to update the policy via a PPO-style clipped
+surrogate objective. Groups where all completions receive the same reward
+(degenerate groups) provide no learning signal and are skipped. The metric
+\texttt{train/frac\_degenerate} tracks the proportion of such groups per step.
+
+\subsubsection{GRPO Hyperparameters}
+
+\begin{table}[H]
+\centering
+\caption{GRPO training hyperparameters (canonical pipeline defaults).}
+\begin{tabularx}{\linewidth}{L{5cm} C{9.2cm}}
+\toprule
+\thead{Hyperparameter} & \thead{Value} \\
+\midrule
+Base model & \texttt{Qwen/Qwen3-8B} \\
+Starting checkpoint & Latest valid checkpoint from \texttt{outputs/sft/} \\
+LoRA rank & 64 (must match SFT) \\
+Learning rate & $4 \times 10^{-5}$ \\
+Batch size & 16 \\
+Group size ($G$) & 8 \\
+Max training steps & 50 \\
+Max completion length & 512 tokens \\
+Checkpoint save steps & 17 \\
+Seed & 42 \\
+Training platform & Tinker remote GPUs \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The requirement that the GRPO LoRA rank matches the SFT rank is enforced in
+\texttt{scripts/run\_pipeline.sh}; mismatched ranks cause an immediate
+pipeline abort before any Tinker API calls.
+
+\subsubsection{Prompt Dataset for GRPO}
+
+GRPO prompts are loaded through \texttt{ToolUseDataLoader} in
+\texttt{build\_prompt\_dataset()}. Each prompt dict carries:
+
+\begin{itemize}[leftmargin=1.5em, itemsep=3pt]
+  \item \textbf{\texttt{prompt\_text}} --- the natural language instruction.
+  \item \textbf{\texttt{expected\_tool}} --- the correct first tool name (for
+    \texttt{tool\_name\_reward}).
+  \item \textbf{\texttt{expected\_args}} --- the correct argument dict (for
+    \texttt{argument\_f1\_reward}).
+  \item \textbf{\texttt{expected\_chain}} --- the ordered list of tool names
+    for multi-step examples (for chain rewards).
+  \item \textbf{\texttt{source}} --- the originating data source tag.
+\end{itemize}
+
+\subsubsection{Dry-Run Behaviour}
+
+With \texttt{LOCAL\_VALIDATE=true}, the GRPO script logs simulated reward and
+degenerate-group metrics through the same W\&B integration used in full training,
+allowing the reward computation and group-update logic to be verified locally.
+
+% =============================================================================
+\section{Reward Function Design}
+% =============================================================================
+
+The reward functions in \texttt{src/rewards.py} are the core of the GRPO stage.
+All functions share the same call signature:
+\texttt{reward\_fn(completions, **kwargs) -> list[float]}.
+
+\subsection{Tool Call Extraction}
+
+Before scoring, completions are parsed by \texttt{extract\_tool\_call()} (single
+call) or \texttt{extract\_tool\_calls()} (all calls). Both functions first strip
+any \texttt{<think>...</think>} blocks (for reasoning-enabled models), then
+attempt extraction in priority order:
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=3pt]
+  \item Fenced JSON blocks: \texttt{```json \{...\} ```}
+  \item \texttt{<tool\_call>...</tool\_call>} XML tags (primary format)
+  \item Qwen \texttt{<|function\_call|>} format
+  \item Fallback: any JSON object with a \texttt{"name"} key
+\end{enumerate}
+
+\subsection{Individual Reward Signals}
+
+\begin{table}[H]
+\centering
+\caption{Reward functions and their behaviours.}
+\begin{tabularx}{\linewidth}{L{4.5cm} C{1.5cm} L{8.2cm}}
+\toprule
+\thead{Reward Function} & \thead{Range} & \thead{Description} \\
+\midrule
+\texttt{schema\_validation\_reward} & $[0, 1]$ & Binary. 1.0 if the completion
+  contains a parseable tool call with a non-empty \texttt{name} string and a
+  dict \texttt{arguments} field; 0.0 otherwise. Always applied. \\[4pt]
+\texttt{tool\_name\_reward} & $[0, 1]$ & Binary. 1.0 if the predicted tool name
+  matches \texttt{expected\_tool} (case-insensitive); 0.0 otherwise. Applied
+  when \texttt{expected\_tool} is provided. \\[4pt]
+\texttt{argument\_f1\_reward} & $[0, 1]$ & Partial credit. Computes key-value
+  F1 between predicted and expected argument dicts (string-normalised values).
+  Applied when \texttt{expected\_args} is provided. \\[4pt]
+\texttt{full\_chain\_reward} & $[0, 1]$ & Binary. 1.0 if the \textit{ordered}
+  sequence of predicted tool names exactly matches \texttt{expected\_chain}.
+  Applied for multi-step examples. \\[4pt]
+\texttt{chain\_partial\_reward} & $[0, 1]$ & Partial credit. Position-wise
+  fraction of expected chain tools correctly predicted ($\frac{1}{N}$ per
+  correct position). Provides gradient signal for partially correct chains. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Composite Reward}
+
+\texttt{compute\_rewards()} in \texttt{src/rewards.py} assembles the applicable
+reward functions at runtime based on which metadata fields are available in the
+prompt dict. The composite reward is the \textbf{arithmetic mean} of all
+applicable component rewards:
+
+\begin{equationbox}
+\[
+  r_{\text{composite}} = \frac{1}{|\mathcal{F}|}\sum_{f \in \mathcal{F}} r_f
+\]
+\end{equationbox}
+
+where $\mathcal{F}$ is the set of active reward functions for the current
+example. This equal-weight averaging ensures that all applicable signals
+contribute proportionally and avoids any single signal dominating.
+
+The mixing strategy deliberately combines \textbf{strict binary signals}
+(schema, tool name, full chain) with \textbf{partial-credit signals}
+(argument F1, chain partial). Binary signals establish the categorical
+constraint; partial-credit signals provide smooth gradients when the model
+is near but not exactly correct.
+
+% =============================================================================
+\section{Evaluation Framework}
+% =============================================================================
+
+\subsection{Evaluation Harness}
+
+\texttt{src/evaluate.py} implements a three-stage evaluation harness that
+can compare baseline, SFT, and GRPO checkpoints in a single run. Evaluation
+is driven by Tinker inference (remote model sampling) against the structured
+test split.
+
+\subsection{Test Data Source}
+
+Evaluation examples are loaded in priority order:
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=3pt]
+  \item \texttt{data/processed/test\_raw.jsonl} --- preferred; preserves tool
+    metadata, prompt text, and structured expected fields.
+  \item Held-out examples from \texttt{data/raw/synthetic/} --- used if the
+    prepared test file is absent; a stable 10\% hash-based split ensures the
+    same examples are always selected.
+\end{enumerate}
+
+A stable test split is implemented via MD5 hashing of each row's serialised
+JSON; rows whose hash modulo 100 falls below the threshold (10) are included.
+This ensures reproducibility without a fixed ordering requirement.
+
+\subsection{Evaluation Metrics}
+
+\begin{table}[H]
+\centering
+\caption{Evaluation metrics computed for each stage.}
+\begin{tabularx}{\linewidth}{L{5cm} L{9.2cm}}
+\toprule
+\thead{Metric Key} & \thead{Definition} \\
+\midrule
+\texttt{tool\_selection\_accuracy} & Exact match on the first extracted tool call name. \\
+\texttt{argument\_accuracy} & Exact dictionary match on extracted arguments. \\
+\texttt{schema\_compliance} & Output contains a parseable tool call with valid name and argument dict. \\
+\texttt{multi\_step\_success} & Expected tool-call chain reproduced in correct order. \\
+\texttt{multi\_step\_partial} & At least one but not all chain steps correct. \\
+\texttt{multi\_step\_one\_call\_only} & Only one call produced for a multi-step prompt. \\
+\texttt{multi\_step\_wrong\_order} & Correct tools but in wrong order. \\
+\texttt{multi\_step\_zero\_calls} & No tool call produced for a multi-step prompt. \\
+\texttt{avg\_latency\_ms} & Average wall-clock time per model response (milliseconds). \\
+\texttt{ms\_per\_token} & Normalised latency per generated token. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Pipeline Commands}
+
+\begin{table}[H]
+\centering
+\caption{Evaluation entrypoints from \texttt{src/evaluate.py} and the pipeline script.}
+\begin{tabularx}{\linewidth}{L{4cm} L{10.2cm}}
+\toprule
+\thead{Mode} & \thead{Command / Purpose} \\
+\midrule
+\texttt{baseline} & Zero-shot evaluation of \texttt{Qwen/Qwen3-8B} with no adapter \\
+\texttt{sft} & Evaluate the SFT checkpoint \\
+\texttt{grpo} & Evaluate the GRPO checkpoint \\
+\texttt{compare} & Run all three stages and produce a merged JSON \\
+\texttt{all} & Full pipeline (baseline + sft + grpo + compare) \\
+\texttt{local-compare} & Reconstruct comparison from pre-saved JSON result files \\
+\texttt{fetch-compare} & Reconstruct comparison from W\&B run data \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\newpage
+
+% =============================================================================
+\section{Results and Analysis}
+% =============================================================================
+
+\subsection{Cross-Stage Comparison}
+
+The canonical results are stored in \texttt{outputs/eval\_comparison.json}
+and reproduced in full below.
+
+\begin{table}[H]
+\centering
+\caption{Full evaluation results across all three training stages.}
+\begin{tabularx}{\linewidth}{L{5.5cm} C{2.5cm} C{2.5cm} C{3.7cm}}
+\toprule
+\thead{Metric} & \thead{Baseline} & \thead{SFT} & \thead{GRPO} \\
+\midrule
+Tool Selection Accuracy       & 0.782 & 0.774 & 0.774 \\
+Argument Accuracy             & 0.308 & 0.310 & \textbf{0.321} \\
+Schema Compliance             & 0.807 & 0.812 & \textbf{0.814} \\
+Multi-Step Success            & 0.406 & 0.386 & \textbf{0.413} \\
+Multi-Step Partial            & 0.394 & 0.402 & \textbf{0.425} \\
+Multi-Step One-Call Only      & 0.039 & 0.031 & 0.035 \\
+Multi-Step Wrong Order        & 0.004 & 0.012 & 0.020 \\
+Multi-Step Zero Calls         & 0.154 & \textbf{0.165} & \textbf{0.106} \\
+Avg Latency (ms)              & 6\,074.8 & 7\,124.9 & 7\,098.9 \\
+ms per Token                  & 15.79 & 20.73 & 20.42 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Key Observations}
+
+\subsubsection{Tool Selection Accuracy}
+
+The baseline \texttt{Qwen3-8B} achieves 78.2\% tool selection accuracy
+zero-shot, reflecting the strong pre-training of the Qwen3 series. Both SFT and
+GRPO register 77.4\%, a marginal decline. This is consistent with the model
+having been trained on synthetic data whose instruction distribution is narrower
+than the zero-shot capability --- fine-tuning on a constrained domain can
+slightly regress generalisation while improving schema-specific behaviour.
+
+\subsubsection{Argument Accuracy}
+
+Argument accuracy shows a monotonic improvement across stages: 0.308
+(baseline) $\rightarrow$ 0.310 (SFT) $\rightarrow$ 0.321 (GRPO). The
+\texttt{argument\_f1\_reward} applied during GRPO provides a direct partial-credit
+gradient signal for argument key--value correctness, explaining this improvement.
+The 1.3 percentage point gain from SFT to GRPO is modest, reflecting the
+limited number of GRPO steps (50) relative to the diversity of argument patterns
+in the dataset.
+
+\subsubsection{Schema Compliance}
+
+Schema compliance rises from 80.7\% (baseline) to 81.2\% (SFT) to 81.4\%
+(GRPO). The baseline's 80.7\% is already high because \texttt{Qwen3-8B} natively
+understands structured output. The marginal gains confirm that the \texttt{schema\_validation\_reward}
+in GRPO successfully reinforces the \texttt{<tool\_call>} output format.
+
+\subsubsection{Multi-Step Performance}
+
+Multi-step metrics reveal the most interesting pattern:
+
+\begin{itemize}[leftmargin=1.5em, itemsep=5pt]
+  \item \textbf{Multi-Step Success} drops from 0.406 (baseline) to 0.386
+    (SFT), then recovers to 0.413 (GRPO). This U-shape is important: SFT on
+    single-step-dominated synthetic data may cause the model to regress on
+    multi-step problems. GRPO reverses this regression and surpasses the
+    baseline.
+  \item \textbf{Multi-Step Zero Calls} --- the fraction of multi-step prompts
+    where the model emits \textit{no} tool call at all --- falls substantially
+    from 16.5\% (SFT) to 10.6\% (GRPO). This is the clearest signature of
+    GRPO's reinforcement signal working: the \texttt{schema\_validation\_reward}
+    penalises zero-call outputs directly.
+  \item \textbf{Multi-Step Partial} improves from 0.402 (SFT) to 0.425 (GRPO),
+    indicating that the model is producing more of the required chain steps even
+    when it does not complete all of them.
+  \item \textbf{Multi-Step Wrong Order} increases slightly (0.012 $\rightarrow$
+    0.020), suggesting that GRPO pushes the model to attempt more multi-step
+    outputs, and some of those attempts get the order wrong. This is an expected
+    trade-off with more aggressive exploration.
+\end{itemize}
+
+\subsubsection{Latency}
+
+Both fine-tuned stages are slower than the zero-shot baseline
+(7\,100--7\,125\,ms vs. 6\,075\,ms average latency). This increase is expected:
+the LoRA adapters add computation to each forward pass, and the longer outputs
+required by the \texttt{<tool\_call>} format increase token count relative to
+bare natural-language responses. GRPO (7\,099\,ms) is marginally faster than
+SFT (7\,125\,ms) on average, with a lower ms-per-token (20.42 vs. 20.73).
+
+\subsection{Intermediate Test Files}
+
+The repository also contains three lightweight intermediate test files in
+\texttt{outputs/}:
+
+\begin{table}[H]
+\centering
+\caption{Intermediate single-metric evaluation snapshots.}
+\begin{tabularx}{\linewidth}{L{5.5cm} C{8.7cm}}
+\toprule
+\thead{File} & \thead{Tool Selection Accuracy} \\
+\midrule
+\texttt{\_tmp\_eval\_baseline.json} & 0.50 \\
+\texttt{\_tmp\_eval\_sft.json} & 0.70 \\
+\texttt{\_tmp\_eval\_grpo.json} & 0.90 \\
+\texttt{\_tmp\_eval\_compare.json} & baseline 0.50, SFT 0.70, GRPO 0.90 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+These files contain only a single metric (\texttt{tool\_selection\_accuracy})
+and appear to be lightweight test runs or placeholder outputs used to verify
+pipeline wiring. They are not
+representative of the full evaluation; \texttt{outputs/eval\_comparison.json}
+is the authoritative multi-metric result.
+
+
+
+\newpage
+
+% =============================================================================
+\section{Pipeline Execution and Reproducibility}
+% =============================================================================
+
+\subsection{End-to-End Entrypoint}
+
+The canonical pipeline is invoked via a single shell script:
+
+\begin{lstlisting}
+bash scripts/run_pipeline.sh all
+\end{lstlisting}
+
+Stage-specific invocations are also available:
+
+\begin{lstlisting}
+bash scripts/run_pipeline.sh baseline   # zero-shot eval only
+bash scripts/run_pipeline.sh sft        # SFT training + eval
+bash scripts/run_pipeline.sh grpo       # GRPO training + eval
+bash scripts/run_pipeline.sh compare    # cross-stage comparison
+\end{lstlisting}
+
+\subsection{Local Validation Mode}
+
+To validate pipeline wiring without remote compute:
+
+\begin{lstlisting}
+LOCAL_VALIDATE=true bash scripts/run_pipeline.sh all
+\end{lstlisting}
+
+This activates the following substitutions:
+\begin{itemize}[leftmargin=1.5em, itemsep=3pt]
+  \item Base model: \texttt{Qwen/Qwen3-8B} $\rightarrow$ \texttt{sshleifer/tiny-gpt2}
+  \item Training: remote Tinker calls $\rightarrow$ local mock loops
+  \item Hub upload: disabled (\texttt{HF\_REPO\_ID} cleared)
+  \item Dry-run steps: 3 (configurable via \texttt{--dry-run-steps})
+\end{itemize}
+
+\subsection{Pre-Flight Checks}
+
+The pipeline script performs pre-flight validation before any remote API call:
+
+\begin{itemize}[leftmargin=1.5em, itemsep=3pt]
+  \item \texttt{TINKER\_API\_KEY} must be set (unless \texttt{LOCAL\_VALIDATE=true}).
+  \item The synthetic data directory must contain at least one JSONL file
+    (\texttt{data/raw/synthetic}); if not, the generator script
+    (\texttt{scripts/generate\_synthetic.py}) is invoked automatically.
+  \item GRPO LoRA rank must match the SFT LoRA rank; mismatch causes immediate
+    abort with a descriptive error.
+  \item Warnings are emitted (but execution continues) when \texttt{WANDB\_API\_KEY}
+    is absent, or when \texttt{HF\_REPO\_ID} is set without \texttt{HF\_TOKEN}.
+\end{itemize}
+
+\subsection{Optional Hugging Face Hub Upload}
+
+Both the SFT and GRPO scripts support uploading the final LoRA adapter to the
+Hugging Face Hub via \texttt{push\_model\_to\_hub.py}. This is activated by
+setting \texttt{HF\_TOKEN} and \texttt{HF\_REPO\_ID} in the environment.
+
+% =============================================================================
+\section{Limitations and Improvement Opportunities}
+% =============================================================================
+
+This repository demonstrates a robust end-to-end training and evaluation
+pipeline, but several limitations are visible from the current implementation
+and outputs.
+
+\subsection{Current Limitations}
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=6pt]
+  \item \textbf{Synthetic-only training distribution.}
+    All training data is generated from templates. This ensures controllability
+    and reproducibility, but limits linguistic diversity and real-world tool-use
+    variability. The model may overfit to templated phrasing and underperform on
+    naturally noisy user requests.
+
+  \item \textbf{Narrow evaluation domain.}
+    Evaluation examples are sourced from the prepared processed test split
+    (\texttt{test\_raw.jsonl} under \texttt{data/processed}) or held-out
+    synthetic rows, so test data remains close to the training generation
+    process. This likely inflates in-domain metrics relative to real-world
+    prompts.
+
+  \item \textbf{Modest GRPO training budget.}
+    The canonical GRPO run uses 50 steps with group size 8. This is sufficient
+    to show measurable gains, but small for a model of this scale and may not
+    fully converge reward-conditioned behavior.
+
+  \item \textbf{Multi-step ordering errors persist.}
+    \texttt{multi\_step\_wrong\_order} increases from 0.012 (SFT) to 0.020 (GRPO),
+    indicating that while GRPO encourages more chain attempts, ordering
+    consistency remains an unresolved failure mode.
+
+  \item \textbf{Latency overhead after fine-tuning.}
+    SFT and GRPO checkpoints are slower than baseline (around 7.1s vs 6.1s avg
+    latency). For interactive agents, this can materially affect user
+    experience.
+
+  \item \textbf{No production-serving benchmark in repository.}
+    The current results quantify inference latency in evaluation mode but do not
+    include throughput/load tests under concurrent serving settings.
+\end{enumerate}
+
+\subsection{Improvement Opportunities}
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=6pt]
+  \item \textbf{Blend synthetic and real traces.}
+    Add curated real conversation logs (with privacy filtering) or open
+    function-calling corpora to reduce distribution shift and improve
+    generalization.
+
+  \item \textbf{Strengthen multi-step reward shaping.}
+    Add explicit penalties for wrong-order chains and repeated calls, and add a
+    positive reward for terminating with a concise final answer after successful
+    tool execution.
+
+  \item \textbf{Increase GRPO training depth.}
+    Run longer GRPO schedules (for example 150--400 steps), monitor per-component
+    reward curves, and evaluate whether gains saturate or continue.
+
+  \item \textbf{Expand evaluation benchmarks.}
+    Introduce adversarial and out-of-domain prompt suites (ambiguous queries,
+    missing arguments, conflicting constraints, and malformed tool specs).
+
+  \item \textbf{Add schema-aware decoding constraints.}
+    Use constrained decoding or grammar-guided decoding during inference to
+    reduce malformed outputs and improve first-pass compliance.
+
+  \item \textbf{Improve serving efficiency.}
+    Introduce quantized inference checkpoints and KV-cache-aware serving
+    benchmarks to recover latency while preserving structured-output quality.
+\end{enumerate}
+
+\newpage
+
+% =============================================================================
+\section{Conclusions}
+% =============================================================================
+
+Based on the implementation and results of this repository, the following
+conclusions can be drawn
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=10pt]
+
+  \item \textbf{SFT on synthetic data provides incremental gains on argument
+    accuracy and schema compliance, but can regress multi-step performance.}
+    SFT raised argument accuracy from 0.308 to 0.310 and schema compliance
+    from 0.807 to 0.812. However, multi-step success dropped from 0.406 to
+    0.386, suggesting that single-step-dominated synthetic data partially
+    suppresses the base model's multi-step reasoning capability.
+
+  \item \textbf{GRPO recovers and surpasses the baseline on multi-step metrics.}
+    GRPO pushed multi-step success to 0.413 (above the 0.406 baseline) and
+    reduced the zero-call failure rate from 16.5\% to 10.6\%. The
+    \texttt{schema\_validation\_reward} directly penalises empty outputs,
+    providing an explicit gradient signal that SFT's cross-entropy loss cannot
+    supply.
+
+  \item \textbf{Argument quality improves most under GRPO.}
+    The \texttt{argument\_f1\_reward} provides a partial-credit signal for
+    argument key--value overlap, which SFT's binary cross-entropy cannot
+    express. This explains why argument accuracy improves more from SFT to GRPO
+    (0.310 $\rightarrow$ 0.321) than from baseline to SFT (0.308 $\rightarrow$
+    0.310).
+
+  \item \textbf{The composite, multi-signal reward design is effective.}
+    By combining strict binary signals (schema validation, exact tool name,
+    exact chain match) with partial-credit signals (argument F1, positional
+    chain credit), the reward function provides both categorical constraints
+    and smooth gradients.
+
+  \item \textbf{Fine-tuning introduces a latency cost.}
+    Both SFT and GRPO checkpoints are approximately 17\% slower than the
+    zero-shot baseline (7\,100\,ms vs. 6\,075\,ms average). This overhead
+    is attributable to LoRA adapter computation and longer structured outputs.
+    GRPO is marginally faster than SFT in per-token terms (20.42 vs.
+    20.73\,ms/token).
+
+  \item \textbf{The pipeline is fully reproducible and infrastructure-agnostic.}
+    The dry-run mode (\texttt{LOCAL\_VALIDATE=true}) allows complete
+    end-to-end pipeline validation without remote GPU access. The
+    synthetic data generator uses a fixed seed, preprocessing is deterministic,
+    and all hyperparameters are explicitly versioned in the pipeline script.
+
+\end{enumerate}
+
+\newpage
+
+% =============================================================================
+\section*{References}
+% =============================================================================
+\addcontentsline{toc}{section}{References}
+
+\begin{enumerate}[leftmargin=1.5em, itemsep=6pt, label={[\arabic*]}]
+
+  \item Qwen Team, Alibaba Cloud. (2025). Qwen3 Technical Report.
+    \url{https://huggingface.co/Qwen/Qwen3-8B}
+
+  \item Hu, E.\,J., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang, S.,
+    Wang, L., \& Chen, W. (2021). LoRA: Low-Rank Adaptation of Large Language
+    Models. \textit{arXiv preprint arXiv:2106.09685}.
+
+  \item DeepSeek-AI. (2025). DeepSeek-R1: Incentivizing Reasoning Capability in
+    LLMs via Reinforcement Learning. \textit{arXiv preprint arXiv:2501.12948}.
+
+  \item Schulman, J., Wolski, F., Dhariwal, P., Radford, A., \& Klimov, O. (2017).
+    Proximal Policy Optimization Algorithms. \textit{arXiv preprint
+    arXiv:1707.06347}.
+
+  \item Rafailov, R., Sharma, A., Mitchell, E., Manning, C.\,D., Ermon, S., \&
+    Finn, C. (2023). Direct Preference Optimization: Your Language Model is
+    Secretly a Reward Model. \textit{arXiv preprint arXiv:2305.18290}.
+
+  \item Ouyang, L., et al. (2022). Training language models to follow instructions
+    with human feedback. \textit{arXiv preprint arXiv:2203.02155}.
+
+  \item Tinker --- Remote GPU Infrastructure for LLM Training and Inference.
+    \url{https://tinker.thinkingmachines.ai/}
+
+  \item Wandb Inc. (2020). Weights \& Biases: Machine Learning Experiment
+    Tracking. \url{https://wandb.ai}
+
+\end{enumerate}
+
+\end{document}
